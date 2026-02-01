@@ -43,7 +43,7 @@ $DOCKER_CMD run --rm --network host \
     -v "$BASE_DIR:/src:Z" \
     -e BUILD_MODE=onefile \
     docker.io/batonogov/pyinstaller-windows \
-    "python -m pip install Pillow && python -m pip install -r requirements.txt && pyinstaller --workpath build/windows_build --distpath build/windows_dist packaging/ExCut.spec"
+    "python -m pip install --upgrade pyinstaller && python -m pip install Pillow && python -m pip install -r requirements.txt && pyinstaller --workpath build/windows_build --distpath build/windows_dist packaging/ExCut.spec"
 
 # 5. Finalize output
 echo "📂 Finalizing executable..."
