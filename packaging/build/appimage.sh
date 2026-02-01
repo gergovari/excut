@@ -6,7 +6,7 @@ set -e
 
 # 1. Setup paths
 BASE_DIR=$(pwd)
-VERSION="v0.6" # Initial placeholder, will be bumped
+VERSION="v0.7" # Initial placeholder, will be bumped
 ARCH=$(uname -m)
 PACKAGING_DIR="$BASE_DIR/packaging"
 BUILD_TOOLS_DIR="$PACKAGING_DIR/build"
@@ -41,7 +41,7 @@ mkdir -p "$PYBUILD_DIR" "$PYDIST_DIR" "$DIST_DIR"
 
 # 4. Running PyInstaller
 echo "🛠️ Building binaries with PyInstaller..."
-pyinstaller --workpath "$PYBUILD_DIR" \
+BUILD_MODE=onedir pyinstaller --workpath "$PYBUILD_DIR" \
             --distpath "$PYDIST_DIR" \
             "$PACKAGING_DIR/ExCut.spec"
 
