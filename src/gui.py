@@ -114,7 +114,7 @@ class RecropDialog(QDialog):
 
 class MainWindow(QMainWindow):
     # ... (init remains mostly same until cut_selection) ...
-    def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark"):
+    def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4"):
         super().__init__()
         self.setWindowTitle("ExCut")
         self.resize(1200, 800)
@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         self.bg_image = bg_image
         self.bg_pattern = bg_pattern
         self.theme = theme
+        self.page_size = page_size
         
         # Central Widget
         self.central_widget = QWidget()
@@ -356,7 +357,7 @@ class MainWindow(QMainWindow):
                 new_item["content"] = io.BytesIO(buff.data().data())
             pdf_items.append(new_item)
         try:
-            generate_output_pdf(pdf_items, self.output_file, self.bg_image, self.bg_pattern)
+            generate_output_pdf(pdf_items, self.output_file, self.bg_image, self.bg_pattern, self.page_size)
             QMessageBox.information(self, "Success", f"PDF saved to {self.output_file}")
             sys.exit(0)
         except Exception as e:

@@ -16,7 +16,7 @@ def main():
     
     app = QApplication(sys.argv)
     
-    window = MainWindow(args.input_files, args.output, args.bg_image, args.bg_pattern, args.theme)
+    window = MainWindow(args.input_files, args.output, args.bg_image, args.bg_pattern, args.theme, args.page_size)
     window.showMaximized()
     
     sys.exit(app.exec())

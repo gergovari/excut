@@ -1,11 +1,12 @@
 import fitz  # PyMuPDF
 from PIL import Image
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
+from reportlab.lib import pagesizes
 from reportlab.lib.utils import ImageReader
 from reportlab.lib.colors import black
 import io
 import os
+import re
 
 def load_input_files(paths):
     """
@@ -28,15 +29,34 @@ def load_input_files(paths):
             with open(path, "rb") as f:
                 yield f.read(), path, 1
 
-def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None):
+def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None, page_size_str="A4"):
     """
     items: List of dicts {'type': 'image'|'title', 'content': ..., 'title': ...}
     output_path: Path to save PDF
     bg_image: Optional background image path
     bg_pattern: Optional background pattern name
+    page_size_str: "A4", "A3", or "WIDTHxHEIGHT" (e.g. "1860x2480")
     """
-    c = canvas.Canvas(output_path, pagesize=A4)
-    width, height = A4
+    # Determine page size
+    if "x" in page_size_str and re.match(r'^\d+(\.\d+)?x\d+(\.\d+)?$', page_size_str):
+        parts = page_size_str.lower().split('x')
+        current_pagesize = (float(parts[0]), float(parts[1]))
+    else:
+        # Try to find standard size (case insensitive)
+        fname = page_size_str.upper()
+        if hasattr(pagesizes, fname):
+            current_pagesize = getattr(pagesizes, fname)
+        else:
+            print(f"Warning: Unknown page size '{page_size_str}', defaulting to A4")
+            current_pagesize = pagesizes.A4
+
+    c = canvas.Canvas(output_path, pagesize=current_pagesize)
+    width, height = current_pagesize
+    
+    # Calculate scale factor relative to A4 width
+    # If page is bigger, everything should be bigger
+    base_width = pagesizes.A4[0] # 595.27
+    scale_factor = width / base_width
     
     # Default to squared if neither provided
     if not bg_image and not bg_pattern:
@@ -52,12 +72,12 @@ def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None):
             c.drawImage(bg_image, 0, 0, width=width, height=height)
         elif bg_pattern == "squared":
             c.setStrokeColor(black)
-            c.setLineWidth(0.5)
-            grid_size = 14 
+            c.setLineWidth(0.5 * scale_factor)
+            grid_size = 14 * scale_factor
             c.setStrokeAlpha(0.2)
-            for gx in range(0, int(width), grid_size):
+            for gx in range(0, int(width), int(grid_size)):
                 c.line(gx, 0, gx, height)
-            for gy in range(0, int(height), grid_size):
+            for gy in range(0, int(height), int(grid_size)):
                 c.line(0, gy, width, gy)
             c.setStrokeAlpha(1.0)
 
@@ -74,31 +94,37 @@ def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None):
             
             # Title Text
             # Smart font sizing: bigger if short
-            title_font_size = 36
+            # Base sizes: 36, 52, 42
+            base_font_size = 36
             if len(display_title) < 20:
-                title_font_size = 52
+                base_font_size = 52
             elif len(display_title) < 40:
-                title_font_size = 42
+                base_font_size = 42
+            
+            title_font_size = base_font_size * scale_factor
                 
             c.setFont("Helvetica-Bold", title_font_size)
             
             # Wrapping (Manual to enforce char breaking for long words)
             from reportlab.lib.utils import simpleSplit
             
+            margin_x = 100 * scale_factor
+            max_text_width = width - margin_x
+            
             # First pass: try standard split
-            initial_lines = simpleSplit(display_title, "Helvetica-Bold", title_font_size, width - 100)
+            initial_lines = simpleSplit(display_title, "Helvetica-Bold", title_font_size, max_text_width)
             
             lines = []
             for line in initial_lines:
                 # Check if this line exceeds width? simpleSplit usually handles it unless it's one long word
                 # If simpleSplit returned the long word as one line, it might overflow.
                 # Let's force split if too long.
-                if c.stringWidth(line, "Helvetica-Bold", title_font_size) > (width - 100):
+                if c.stringWidth(line, "Helvetica-Bold", title_font_size) > max_text_width:
                     # Force break by chars
                     current_line = ""
                     for char in line:
                         test_line = current_line + char
-                        if c.stringWidth(test_line, "Helvetica-Bold", title_font_size) < (width - 100):
+                        if c.stringWidth(test_line, "Helvetica-Bold", title_font_size) < max_text_width:
                             current_line = test_line
                         else:
                             lines.append(current_line)
@@ -108,17 +134,17 @@ def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None):
                 else:
                     lines.append(line)
             
-            text_h = len(lines) * (title_font_size + 4)
-            start_y = (height / 2) + (text_h / 2) + 50 
+            text_h = len(lines) * (title_font_size + (4 * scale_factor))
+            start_y = (height / 2) + (text_h / 2) + (50 * scale_factor) 
             
             for line in lines:
                 c.drawCentredString(width/2, start_y, line)
-                start_y -= (title_font_size + 10)
+                start_y -= (title_font_size + (10 * scale_factor))
                 
             # Title Number at bottom
             # "not tied to the title" -> absolute position at bottom
-            c.setFont("Helvetica-Bold", 60) # Huge
-            c.drawCentredString(width/2, 100, str(title_count))
+            c.setFont("Helvetica-Bold", 60 * scale_factor) # Huge
+            c.drawCentredString(width/2, 100 * scale_factor, str(title_count))
         
         elif item["type"] == "image":
             ex_count += 1
@@ -130,31 +156,40 @@ def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None):
                  c.addOutlineEntry(f"{ex_count}: {display_title}", key, level=1, closed=True)
 
             # Draw Ordinal Number "<num> /"
-            current_y = height - 50 
-            c.setFont("Helvetica-Bold", 20)
-            c.drawString(40, current_y, f"{ex_count} /")
+            bottom_margin = 50 * scale_factor
+            current_y = height - bottom_margin 
+            
+            font_size_num = 20 * scale_factor
+            c.setFont("Helvetica-Bold", font_size_num)
+            
+            left_margin = 40 * scale_factor
+            c.drawString(left_margin, current_y, f"{ex_count} /")
             
             # Draw Tick Circle
-            cx = width - 50
-            cy = current_y + 7 
-            radius = 12
-            c.setLineWidth(2)
+            cx = width - (50 * scale_factor)
+            cy = current_y + (7 * scale_factor) 
+            radius = 12 * scale_factor
+            c.setLineWidth(2 * scale_factor)
             c.circle(cx, cy, radius, stroke=1, fill=0)
             
             # Reduce space between number/circle and picture
             # Previously current_y -= 40. Reduce to 20? 
-            current_y -= 25 # Tighter
+            current_y -= (25 * scale_factor) # Tighter
             
             exercise_img = item["content"]
             img_reader = ImageReader(exercise_img)
             img_w, img_h = img_reader.getSize()
             
-            margin = 40
+            margin = 40 * scale_factor
             max_w = width - (2 * margin)
             max_h = current_y - margin
             
-            scale = 1.0
-            if img_w > max_w:
+            # Start with scaling up relative to page size difference
+            # This ensures images look "normal size" on huge pages
+            scale = scale_factor
+
+            # Then constrain if it exceeds available space
+            if (img_w * scale) > max_w:
                 scale = max_w / img_w
             if (img_h * scale) > max_h:
                 scale = max_h / img_h
