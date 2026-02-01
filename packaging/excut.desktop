@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=ExCut
+Exec=ExCut.AppImage %u
+Icon=icon
+Type=Application
+Categories=Utility;Graphics;
+Terminal=false
+Comment=Exercise Cutter & PDF Assembler
