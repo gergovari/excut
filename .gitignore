@@ -5,11 +5,10 @@ venv/
 .env
 .DS_Store
 dist/
-build/
+build/*
 *.AppImage
 *.exe
 .idea/
 .vscode/
 data
 *.pdf
-
