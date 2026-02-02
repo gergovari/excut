@@ -123,18 +123,20 @@ class SidebarItemWidget(QWidget):
         self.drag_label = DragHandle(tree, item, self)
         layout.addWidget(self.drag_label)
         
+        self.icon_label = None
+        
         if icon:
-            lbl_icon = QLabel()
-            lbl_icon.setPixmap(icon.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-            layout.addWidget(lbl_icon)
+            self.icon_label = QLabel()
+            self.icon_label.setPixmap(icon.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            layout.addWidget(self.icon_label)
         elif is_group:
-             lbl_icon = QLabel("📁")
-             lbl_icon.setStyleSheet("font-size: 16px;")
-             layout.addWidget(lbl_icon)
+             self.icon_label = QLabel("📁")
+             self.icon_label.setStyleSheet("font-size: 16px;")
+             layout.addWidget(self.icon_label)
         elif is_title:
-             lbl_icon = QLabel("T")
-             lbl_icon.setStyleSheet("font-weight: bold; font-size: 20px; border: 1px solid #ccc; padding: 5px;")
-             layout.addWidget(lbl_icon)
+             self.icon_label = QLabel("T")
+             self.icon_label.setStyleSheet("font-weight: bold; font-size: 20px; border: 1px solid #ccc; padding: 5px;")
+             layout.addWidget(self.icon_label)
             
         self.label = QLineEdit(text)
         self.label.setReadOnly(True)
@@ -222,6 +224,17 @@ class SidebarItemWidget(QWidget):
     def set_text(self, text):
         self.label.setText(text)
         self.label.setCursorPosition(0)
+
+    def set_icon(self, icon):
+        if self.icon_label:
+            self.icon_label.setPixmap(icon.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            # If no icon label existed (should only happen if created without icon/group/title which shouldn't happen for images)
+            # Create one insert it? For now assume it exists if we are calling set_icon (image type)
+            self.icon_label = QLabel()
+            self.icon_label.setPixmap(icon.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            # Insert after drag handle (index 1)
+            self.layout().insertWidget(1, self.icon_label)
 
 class SidebarTree(QTreeWidget):
     widgets_refreshed = pyqtSignal()
