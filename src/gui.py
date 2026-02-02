@@ -478,9 +478,9 @@ class MainWindow(QMainWindow):
         self.shortcut_f2.activated.connect(self.sidebar.rename_selected)
         
         self.shortcut_j = QShortcut(QKeySequence(Qt.Key.Key_J), self)
-        self.shortcut_j.activated.connect(lambda: self.sidebar.tree.setCurrentItem(self.sidebar.tree.itemBelow(self.sidebar.tree.currentItem())))
+        self.shortcut_j.activated.connect(self.sidebar.tree.navigate_next)
         self.shortcut_k = QShortcut(QKeySequence(Qt.Key.Key_K), self)
-        self.shortcut_k.activated.connect(lambda: self.sidebar.tree.setCurrentItem(self.sidebar.tree.itemAbove(self.sidebar.tree.currentItem())))
+        self.shortcut_k.activated.connect(self.sidebar.tree.navigate_prev)
 
         self.apply_theme(self.theme)
 

@@ -268,6 +268,64 @@ class SidebarTree(QTreeWidget):
 
         super().dragMoveEvent(event)
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Down:
+            self.navigate_next()
+        elif event.key() == Qt.Key.Key_Up:
+            self.navigate_prev()
+        else:
+            super().keyPressEvent(event)
+
+    def navigate_next(self):
+        selected = self.selectedItems()
+        if not selected:
+            # Select first item
+            top = self.topLevelItem(0)
+            if top:
+                self.setCurrentItem(top)
+            return
+
+        current = self.currentItem()
+        if current:
+            # Check if we are at the very last visible item
+            # itemBelow returns None if at bottom
+            next_item = self.itemBelow(current)
+            if next_item:
+                self.setCurrentItem(next_item)
+            else:
+                # At bottom, deselect
+                self.clearSelection()
+                self.setCurrentItem(None)
+
+    def navigate_prev(self):
+        selected = self.selectedItems()
+        if not selected:
+            # Select last visible item
+            # We need to find the last item. 
+            # itemAbove(None) doesn't work.
+            # We can traverse down? Or is there a shortcut?
+            # QTreeWidget doesn't have "lastItem".
+            # We can get topLevelItem(count-1) and then find its last child?
+            # Or simplified: Select last top level for now?
+            # Better: Traverse
+            last = self.topLevelItem(self.topLevelItemCount() - 1)
+            if last:
+                while last.childCount() > 0 and last.isExpanded():
+                    last = last.child(last.childCount() - 1)
+                self.setCurrentItem(last)
+            return
+
+        current = self.currentItem()
+        if current:
+             # Check if we are at top
+            prev_item = self.itemAbove(current)
+            if prev_item:
+                self.setCurrentItem(prev_item)
+            else:
+                # At top, deselect
+                self.clearSelection()
+                self.setCurrentItem(None)
+
     def dropEvent(self, event):
         # We must call super to handle the data move
         super().dropEvent(event)
@@ -510,12 +568,15 @@ class Sidebar(QWidget):
                 self.state_changed.emit()
 
     def copy_item(self, item):
+        self._recursive_copy(item)
+        
+    def _recursive_copy(self, item, parent_item=None):
         data = item.data(0, Qt.ItemDataRole.UserRole)
-        # Deep copy data structure manually to ensure control over types
+        # Deep copy data structure manually
         new_data = data.copy()
         
         if "parts" in new_data:
-            # Manually copy parts to ensure proper structure (list of dicts or compatible tuples)
+            # Manually copy parts
             new_parts = []
             for part in new_data["parts"]:
                 # Handle Tuple (Pixmap, Meta)
@@ -542,17 +603,32 @@ class Sidebar(QWidget):
         new_item = QTreeWidgetItem()
         new_item.setData(0, Qt.ItemDataRole.UserRole, new_data)
         
-        parent = item.parent() or self.tree.invisibleRootItem()
-        idx = parent.indexOfChild(item)
-        parent.insertChild(idx + 1, new_item)
-        
+        # Insert into tree
+        if parent_item:
+            parent_item.addChild(new_item)
+        else:
+            # Top level copy (sibling of original)
+            parent = item.parent() or self.tree.invisibleRootItem()
+            idx = parent.indexOfChild(item)
+            parent.insertChild(idx + 1, new_item)
+            self.tree.setCurrentItem(new_item)
+            
+        # Recursive copy of children
+        for i in range(item.childCount()):
+            self._recursive_copy(item.child(i), new_item)
+            
+        # Setup Widget (Must be done after adding to tree)
         is_group = (new_data["type"] == "group")
         is_title = (new_data["type"] == "title")
         icon = new_data.get("content")
         
         self._setup_item_widget(new_item, new_data["title"], icon, is_group, is_title)
-        self.tree.setCurrentItem(new_item)
-        self.state_changed.emit()
+        
+        if is_group:
+            new_item.setExpanded(True)
+
+        if not parent_item:
+            self.state_changed.emit()
 
     def on_item_double_click(self, item, column):
         # Determine type
@@ -637,30 +713,9 @@ class Sidebar(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_J:
-            items = self.tree.selectedItems()
-            if not items:
-                top = self.tree.topLevelItem(0)
-                if top:
-                    self.tree.setCurrentItem(top)
-            else:
-                current = self.tree.currentItem()
-                if current:
-                    next_item = self.tree.itemBelow(current)
-                    if next_item:
-                        self.tree.setCurrentItem(next_item)
+            self.tree.navigate_next()
         elif event.key() == Qt.Key.Key_K:
-            # Prev item
-            items = self.tree.selectedItems()
-            if not items:
-                top = self.tree.topLevelItem(0)
-                if top:
-                    self.tree.setCurrentItem(top)
-            else:
-                current = self.tree.currentItem()
-                if current:
-                    prev_item = self.tree.itemAbove(current)
-                    if prev_item:
-                        self.tree.setCurrentItem(prev_item)
+            self.tree.navigate_prev()
         elif event.key() == Qt.Key.Key_Delete:
             items = self.tree.selectedItems()
             if items:
