@@ -379,10 +379,11 @@ class Sidebar(QWidget):
         widget.copy_clicked.connect(lambda: self.copy_item(item))
         self.tree.setItemWidget(item, 0, widget)
 
-    def delete_item(self, item):
+    def delete_item(self, item, emit_signal=True):
         parent = item.parent() or self.tree.invisibleRootItem()
         parent.removeChild(item)
-        self.state_changed.emit()
+        if emit_signal:
+            self.state_changed.emit()
 
     def edit_item(self, item, widget):
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -514,16 +515,39 @@ class Sidebar(QWidget):
             items_list.append(data)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Delete:
+        if event.key() == Qt.Key.Key_J:
             items = self.tree.selectedItems()
-            for item in items:
-                self.delete_item(item)
+            if not items:
+                top = self.tree.topLevelItem(0)
+                if top:
+                    self.tree.setCurrentItem(top)
+            else:
+                current = self.tree.currentItem()
+                if current:
+                    next_item = self.tree.itemBelow(current)
+                    if next_item:
+                        self.tree.setCurrentItem(next_item)
+        elif event.key() == Qt.Key.Key_K:
+            # Prev item
+            items = self.tree.selectedItems()
+            if not items:
+                top = self.tree.topLevelItem(0)
+                if top:
+                    self.tree.setCurrentItem(top)
+            else:
+                current = self.tree.currentItem()
+                if current:
+                    prev_item = self.tree.itemAbove(current)
+                    if prev_item:
+                        self.tree.setCurrentItem(prev_item)
+        elif event.key() == Qt.Key.Key_Delete:
+            items = self.tree.selectedItems()
+            if items:
+                for item in items:
+                    self.delete_item(item, emit_signal=False)
+                self.state_changed.emit()
         elif event.key() == Qt.Key.Key_F2:
             self.rename_selected()
-        elif event.key() == Qt.Key.Key_J:
-             self.tree.setCurrentItem(self.tree.itemBelow(self.tree.currentItem()))
-        elif event.key() == Qt.Key.Key_K:
-             self.tree.setCurrentItem(self.tree.itemAbove(self.tree.currentItem()))
         else:
             super().keyPressEvent(event)
             

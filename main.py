@@ -9,14 +9,15 @@ def main():
     parser.add_argument("--output", default="output.pdf", help="Output PDF filename (default: output.pdf)")
     parser.add_argument("--bg-image", help="Path to background image for output PDF pages (takes precedence over pattern)", default=None)
     parser.add_argument("--bg-pattern", help="Background pattern name (available: 'squared')", default=None)
-    parser.add_argument("--page-size", default="A4", help="Page size (default: A4)")
+    parser.add_argument("--page-size", type=str, default="A4", help="Page size (A4, A3, etc.)")
     parser.add_argument("--theme", choices=["light", "dark"], default="dark", help="UI Theme (default: dark)")
+    parser.add_argument("--save-path", type=str, default=None, help="Default path for saving the project")
     
     args = parser.parse_args()
     
     app = QApplication(sys.argv)
     
-    window = MainWindow(args.input_files, args.output, args.bg_image, args.bg_pattern, args.theme, args.page_size)
+    window = MainWindow(args.input_files, args.output, args.bg_image, args.bg_pattern, args.theme, args.page_size, args.save_path)
     window.showMaximized()
     
     sys.exit(app.exec())

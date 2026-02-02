@@ -5,6 +5,7 @@ from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBrush, QWheelE
 class SignalProxy(QObject):
     geometry_changed = pyqtSignal()
     removed = pyqtSignal()
+    about_to_change = pyqtSignal()
 
 class ResizableRectItem(QGraphicsRectItem):
     def __init__(self, rect, parent=None):
@@ -12,6 +13,7 @@ class ResizableRectItem(QGraphicsRectItem):
         self.signals = SignalProxy()
         self.geometry_changed = self.signals.geometry_changed
         self.removed = self.signals.removed
+        self.about_to_change = self.signals.about_to_change
 
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable | 
                       QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | 
@@ -66,6 +68,7 @@ class ResizableRectItem(QGraphicsRectItem):
         super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event):
+        self.about_to_change.emit()
         if self.current_handle:
             self.is_resizing = True
         else:
@@ -113,6 +116,7 @@ class ResizableRectItem(QGraphicsRectItem):
 
 class ImageCanvas(QGraphicsView):
     selection_finished = pyqtSignal(QRect)
+    about_to_change = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -142,6 +146,9 @@ class ImageCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     def set_image(self, image_data):
+        # Clear existing items except the pixmap_item itself if it's being reused
+        # If we want to clear all items including rects, we'd need to manage that
+        # For now, assume this just sets the background image.
         image = QImage.fromData(image_data)
         pixmap = QPixmap.fromImage(image)
         self.pixmap_item.setPixmap(pixmap)

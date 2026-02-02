@@ -1,10 +1,10 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter, QMessageBox, QProgressDialog, 
     QDialog, QVBoxLayout, QPushButton, QApplication, QLabel, QFileDialog, QMenuBar, QMenu,
-    QFormLayout, QLineEdit, QComboBox
+    QFormLayout, QLineEdit, QComboBox, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF
-from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage
+from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage, QPen, QBrush
 from .canvas import ImageCanvas
 from .sidebar import Sidebar
 from .pdf_utils import load_input_files, generate_output_pdf
@@ -57,6 +57,10 @@ class RecropDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
         
+        self.preview_btn = QPushButton("Preview")
+        self.preview_btn.clicked.connect(self.show_preview)
+        btn_layout.addWidget(self.preview_btn)
+        
         self.layout.addLayout(btn_layout)
 
         # Shortcuts
@@ -64,6 +68,91 @@ class RecropDialog(QDialog):
         QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self.next_page)
         QShortcut(QKeySequence(Qt.Key.Key_H), self).activated.connect(self.prev_page)
         QShortcut(QKeySequence(Qt.Key.Key_L), self).activated.connect(self.next_page)
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self.redo)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
+        
+        self.undo_stack = []
+        self.redo_stack = []
+
+        # Connect canvas selection properly here to use save_state
+        try:
+             self.canvas.selection_finished.disconnect()
+        except:
+             pass
+        self.canvas.selection_finished.connect(self._on_canvas_selection_added)
+
+    def _on_canvas_selection_added(self, rect):
+        self.save_state()
+        self.add_from_selection(rect)
+
+    def save_state(self):
+        import copy
+        self._commit_current_page_changes()
+        state = copy.deepcopy(self.current_parts_meta)
+        self.undo_stack.append(state)
+        self.redo_stack.clear()
+
+    def undo(self):
+        if not self.undo_stack:
+            return
+        
+        import copy
+        # Save current state to redo stack before undoing
+        # But we need to commit visible state first to be accurate??
+        self._commit_current_page_changes() 
+        current = copy.deepcopy(self.current_parts_meta)
+        self.redo_stack.append(current)
+            
+        state = self.undo_stack.pop()
+        self.current_parts_meta = state
+        self.load_page(self.view_page_idx) 
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+
+        import copy
+        self._commit_current_page_changes()
+        current = copy.deepcopy(self.current_parts_meta)
+        self.undo_stack.append(current)
+
+        state = self.redo_stack.pop()
+        self.current_parts_meta = state
+        self.load_page(self.view_page_idx)
+
+    def show_preview(self):
+        parts, _ = self.get_result()
+        if not parts:
+            QMessageBox.information(self, "Preview", "No parts to preview.")
+            return
+
+        # Combine
+        total_h = sum(p.height() for p in parts)
+        max_w = max(p.width() for p in parts) if parts else 0
+        
+        combined = QPixmap(max_w, total_h)
+        combined.fill(Qt.GlobalColor.white) # or transparent?
+        
+        painter = QPainter(combined)
+        y = 0
+        for p in parts:
+            painter.drawPixmap(0, y, p)
+            y += p.height()
+        painter.end()
+        
+        # Show
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Exercise Preview")
+        layout = QVBoxLayout(dlg)
+        lbl = QLabel()
+        lbl.setPixmap(combined)
+        
+        scroll = QScrollArea()
+        scroll.setWidget(lbl)
+        layout.addWidget(scroll)
+        dlg.resize(600, 800)
+        dlg.exec()
         
     def load_page(self, page_idx):
         if not (0 <= page_idx < len(self.full_pages)):
@@ -86,11 +175,16 @@ class RecropDialog(QDialog):
         for r in current_page_rects:
             item = ResizableRectItem(QRectF(r))
             item.geometry_changed.connect(self.update_numbers)
-            item.removed.connect(lambda i=item: self.remove_rect(i))
+            item.about_to_change.connect(self.save_state) # Snapshot before mod
+            item.removed.connect(lambda i=item: self._on_rect_removed(i))
             self.canvas.scene.addItem(item)
             self.rect_items.append(item)
             
         self.update_numbers()
+
+    def _on_rect_removed(self, item):
+        self.save_state()
+        self.remove_rect(item)
 
     def prev_page(self):
         self._commit_current_page_changes()
@@ -225,24 +319,34 @@ class SettingsDialog(QDialog):
         }
 
 class MainWindow(QMainWindow):
-    def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4"):
+    def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4", default_save_path=None):
         super().__init__()
+        self.rect_pen = QPen(QColor("#e74c3c"), 2)
+        self.rect_brush = QBrush(QColor(231, 76, 60, 50))
+        self.undo_stack = []
+        self.redo_stack = []
+        self.canvas_undo_stack = []
+        self.canvas_redo_stack = []
+        self.resize_handle_size = 10
+        self.current_editing_item = None
+        
         self.setWindowTitle("ExCut")
         self.resize(1200, 800)
         
-        self.input_paths = input_paths or []
+        self.input_paths = [os.path.abspath(f) for f in input_paths] if input_paths else []
         self.output_file = output_file
         self.bg_image = bg_image
         self.bg_pattern = bg_pattern
         self.theme = theme
         self.page_size = page_size
+        self.current_project_path = default_save_path
         
-        self.current_project_path = None
+        # Temp dir for processing
         self.temp_dir = tempfile.mkdtemp()
         
         self._init_ui()
         
-        self.pages = [] 
+        self.pages = [] # List of (img_data, filename, page_num)
         self.current_idx = 0
         self.pending_parts = []
         
@@ -460,25 +564,56 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
 
     def _serialize_stack(self, stack):
-        # Stack is list of snapshots. Each snapshot is list of item dicts.
-        # We need to ensure QRects are lists.
+        # Recursively convert QRects to lists for JSON serialization
         serialized = []
         for snapshot in stack:
-            ser_snapshot = []
-            for item in snapshot:
-                s_item = item.copy()
-                if "content" in s_item: del s_item["content"]
-                if "children" in s_item:
-                    # We need deep recursion for children serialization if they have QRects
-                    # But _get_sidebar_state already handles structural serialization?
-                    # The stack stores the result of _get_sidebar_state.
-                    # _get_sidebar_state handles QRect conversion!
-                    # So snapshot items are ALREADY CLEAN dicts?
-                    # Let's double check _get_sidebar_state implementation.
-                    pass
-                ser_snapshot.append(s_item)
-            serialized.append(ser_snapshot)
+            if isinstance(snapshot, list):
+                serialized.append(self._clean_snapshot_for_json(snapshot))
+            elif isinstance(snapshot, dict):
+                # Handle rotation dicts
+                if snapshot.get("type") == "rotate":
+                     # data is tuple (img_data, fname, pnum)
+                     # img_data is bytes. json can't serialize bytes directly?
+                     # But save_project handles bytes for main pages?
+                     # No, save_project calls json.dump. Bytes are NOT json serializable.
+                     # We must skip saving rotation undo steps or serialize them properly?
+                     # Rotation steps contain FULL PAGE DATA. This is heavy.
+                     # But current implementation uses pickle-like behavior?
+                     # No, project_io uses json + zip.
+                     # For rotation, we should probably NOT save it to disk in undo stack, 
+                     # or we must encode it.
+                     # Given the complexity, let's filter out 'rotate' actions from saved stack 
+                     # OR properly encode. 
+                     # For now, let's just save sidebar states (lists).
+                     # If we encounter a dict (rotation), we skip it to avoid crash/bloat?
+                     # Or we can try to save it. But bytes must be base64.
+                     pass 
+                else: 
+                     # Should be list for sidebar state
+                     serialized.append(self._clean_snapshot_for_json([snapshot])[0])
         return serialized
+
+    def _clean_snapshot_for_json(self, items):
+        cleaned = []
+        for item in items:
+            c_item = item.copy()
+            
+            if "parts" in c_item:
+                new_parts = []
+                for p in c_item["parts"]:
+                    np = p.copy()
+                    if "rect" in np:
+                        r = np["rect"]
+                        if isinstance(r, QRect):
+                            np["rect"] = [r.x(), r.y(), r.width(), r.height()]
+                    new_parts.append(np)
+                c_item["parts"] = new_parts
+            
+            if "children" in c_item:
+                c_item["children"] = self._clean_snapshot_for_json(c_item["children"])
+            
+            cleaned.append(c_item)
+        return cleaned
 
     def _get_sidebar_state(self):
         state = []
@@ -539,11 +674,11 @@ class MainWindow(QMainWindow):
             
             input_paths, items, metadata = load_project(path, extract_dir)
             self.input_paths = input_paths
+            self.current_project_path = path
             
             if "theme" in metadata:
                 self.theme = metadata["theme"]
                 self.apply_theme(self.theme)
-            
             if "page_size" in metadata:
                 # Handle tuple vs list
                 ps = metadata["page_size"]
@@ -693,23 +828,91 @@ class MainWindow(QMainWindow):
         self.undo_stack.append(self.current_state_snapshot)
         self.current_state_snapshot = new_state
         self.redo_stack.clear() # Invalidated
+
+    def push_canvas_state(self):
+        if not self.current_editing_item:
+            return
         
+        data = self.current_editing_item.data(0, Qt.ItemDataRole.UserRole)
+        import copy
+        state = copy.deepcopy(data.get("parts", []))
+        self.canvas_undo_stack.append(state)
+        self.canvas_redo_stack.clear()
+
+    def undo_canvas(self):
+        if not self.canvas_undo_stack or not self.current_editing_item:
+            return False
+            
+        # Push current to redo
+        data = self.current_editing_item.data(0, Qt.ItemDataRole.UserRole)
+        import copy
+        current_state = copy.deepcopy(data.get("parts", []))
+        self.canvas_redo_stack.append(current_state)
+            
+        state = self.canvas_undo_stack.pop()
+        
+        # Restore logic
+        data["parts"] = state
+        self.current_editing_item.setData(0, Qt.ItemDataRole.UserRole, data)
+        
+        # Refresh Canvas
+        self.handle_recrop(self.current_editing_item, push_state=False)
+        return True
+
+    def redo_canvas(self):
+        if not self.canvas_redo_stack or not self.current_editing_item:
+             return False
+
+        # Push current to undo
+        data = self.current_editing_item.data(0, Qt.ItemDataRole.UserRole)
+        import copy
+        current_state = copy.deepcopy(data.get("parts", []))
+        self.canvas_undo_stack.append(current_state)
+        
+        state = self.canvas_redo_stack.pop()
+        
+        data["parts"] = state
+        self.current_editing_item.setData(0, Qt.ItemDataRole.UserRole, data)
+        
+        self.handle_recrop(self.current_editing_item, push_state=False)
+        return True
+
     def undo(self):
+        # Try Canvas Undo first if active
+        if self.current_editing_item and self.undo_canvas():
+             return
+
         if not self.undo_stack:
             return
             
-        state_to_restore = self.undo_stack.pop()
-        self.redo_stack.append(self.current_state_snapshot)
+        item = self.undo_stack.pop()
         
-        self.sidebar.tree.blockSignals(True) # Prevent feedback loop
-        self.sidebar.tree.clear()
-        self._restore_sidebar_items(state_to_restore)
-        self.sidebar.tree.blockSignals(False)
-        self.sidebar.restore_widgets()
+        if isinstance(item, dict) and item.get('type') == 'rotate':
+             page_idx = item['page_idx']
+             old_data = item['data']
+             
+             # Save current for Redo
+             current_data = self.pages[page_idx]
+             self.redo_stack.append({'type': 'rotate', 'page_idx': page_idx, 'data': current_data})
+             
+             self.pages[page_idx] = old_data
+             if self.current_idx == page_idx:
+                 self.show_current_page()
+        else:
+             state_to_restore = item
+             self.current_state_snapshot = state_to_restore
+             self.redo_stack.append(self.current_state_snapshot)
         
-        self.current_state_snapshot = state_to_restore
+             self.sidebar.tree.blockSignals(True)
+             self.sidebar.tree.clear()
+             self._restore_sidebar_items(state_to_restore)
+             self.sidebar.tree.blockSignals(False)
+             self.sidebar.restore_widgets()
 
     def redo(self):
+        if self.current_editing_item and self.redo_canvas():
+             return
+
         if not self.redo_stack:
             return
 
@@ -884,27 +1087,7 @@ class MainWindow(QMainWindow):
             self.current_idx += 1
             self.show_current_page()
             
-    def rotate_page(self, direction):
-         if not self.pages: return
-         
-         img_data, fname, pnum = self.pages[self.current_idx]
-         old_image = QImage.fromData(img_data)
-         W, H = old_image.width(), old_image.height()
-         
-         transform = QTransform()
-         if direction == 'left': transform.rotate(-90)
-         else: transform.rotate(90)
-         
-         new_image = old_image.transformed(transform)
-         
-         from PyQt6.QtCore import QBuffer, QIODevice
-         buff = QBuffer()
-         buff.open(QIODevice.OpenModeFlag.ReadWrite)
-         new_image.save(buff, "PNG")
-         new_img_data = buff.data().data()
-         
-         self.pages[self.current_idx] = (new_img_data, fname, pnum)
-         self.show_current_page()
+
 
     def cut_selection(self, is_partial):
         selection = self.canvas.get_selection()
@@ -966,8 +1149,30 @@ class MainWindow(QMainWindow):
         painter.end()
         return combined
 
-    def handle_recrop(self, item): 
+    def _on_canvas_selection_added(self, rect):
+        self.push_canvas_state()
+        self.add_new_rect_to_item(rect)
+
+    def _on_rect_removed(self, item_gfx):
+        self.push_canvas_state()
+        self.remove_rect_from_item(item_gfx)
+        
+    def handle_recrop(self, item, push_state=True):
+        self.current_editing_item = item
         data = item.data(0, Qt.ItemDataRole.UserRole)
+        
+        if push_state:
+            self.canvas_undo_stack.clear()
+            # Push initial empty/current state?
+            # Actually push only BEFORE change.
+            # But the first change needs a base state.
+            # Let's push current state as "base" if stack is empty?
+            # No, standard Undo:
+            # 1. State A.
+            # 2. Action -> Push A. State B.
+            pass
+            
+
         if 'parts' in data and data['parts']:
             dlg = RecropDialog(self.pages, data['parts'], self)
             
