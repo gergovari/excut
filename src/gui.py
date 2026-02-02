@@ -1132,6 +1132,11 @@ class MainWindow(QMainWindow):
         return self.combine_parts(pixmaps)
 
     def load_data(self):
+        # 1. Check if save-path exists and is a project
+        if hasattr(self, 'current_project_path') and self.current_project_path and os.path.exists(self.current_project_path) and self.current_project_path.lower().endswith(".excu"):
+             self._load_project_file(self.current_project_path)
+             return
+
         if not self.input_paths:
             return
 
