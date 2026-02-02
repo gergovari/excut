@@ -266,7 +266,7 @@ class Sidebar(QWidget):
         self.pending_layout.addWidget(self.pending_label)
         
         self.discard_btn = QPushButton("Discard Pending")
-        self.discard_btn.setStyleSheet("color: red; font-size: 10px; border: 1px solid red; background: transparent;")
+        self.discard_btn.setProperty("class", "danger-btn")
         self.discard_btn.clicked.connect(self.request_discard.emit)
         self.discard_btn.hide()
         self.pending_layout.addWidget(self.discard_btn)
@@ -287,19 +287,8 @@ class Sidebar(QWidget):
         self.layout.addLayout(btn_layout)
         
         self.finish_btn = QPushButton("Finish && Save PDF")
-        self.finish_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60; 
-                color: white; 
-                font-weight: bold; 
-                font-size: 14px; 
-                padding: 10px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #2ecc71;
-            }
-        """)
+        self.finish_btn = QPushButton("Finish && Save PDF")
+        self.finish_btn.setProperty("class", "success-btn")
         self.finish_btn.clicked.connect(self.finish_clicked.emit)
         self.layout.addWidget(self.finish_btn)
 
@@ -597,12 +586,11 @@ class Sidebar(QWidget):
             
     def update_theme(self, theme):
         self._current_theme = theme
+        # Guide Label Styling to match theme
         if theme == "dark":
-            self.guide_label.setStyleSheet("background: #444; color: white; padding: 5px; border-radius: 4px;")
-            self.tree.setStyleSheet("QTreeWidget { background-color: #2b2b2b; color: white; border: none; }")
+            self.guide_label.setStyleSheet("background: #252526; color: #d4d4d4; padding: 8px; border-radius: 4px; border: 1px solid #454545;")
         else:
-            self.guide_label.setStyleSheet("background: #eee; color: black; padding: 5px; border-radius: 4px;")
-            self.tree.setStyleSheet("QTreeWidget { background-color: white; color: black; border: none; }")
+            self.guide_label.setStyleSheet("background: #f3f3f3; color: #333; padding: 8px; border-radius: 4px; border: 1px solid #ccc;")
             
         # Recursive update
         root = self.tree.invisibleRootItem()
