@@ -1,7 +1,8 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QLabel, 
     QPushButton, QHBoxLayout, QInputDialog, QMenu, QDialog, QScrollArea,
-    QAbstractItemView, QFrame, QApplication, QCheckBox, QDialogButtonBox
+    QAbstractItemView, QFrame, QApplication, QCheckBox, QDialogButtonBox,
+    QLineEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint
 from PyQt6.QtGui import QPixmap, QIcon, QAction, QDrag
@@ -84,63 +85,106 @@ class SidebarItemWidget(QWidget):
     delete_clicked = pyqtSignal()
     edit_clicked = pyqtSignal()
     copy_clicked = pyqtSignal()
-
+    
     def __init__(self, text, tree, item, icon=None, is_title=False, is_group=False):
         super().__init__()
+        self.tree = tree
+        self.item = item
+        self.is_title = is_title
+        self.is_group = is_group
+        
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(5)
         
         # Drag Handle
         self.drag_label = DragHandle(tree, item, self)
         layout.addWidget(self.drag_label)
         
-        # Icon / Thumbnail
-        self.icon_label = QLabel()
-        if is_group:
-             self.icon_label.setText("📁")
-             self.icon_label.setStyleSheet("font-size: 16px;")
-        elif icon:
-            scaled = icon.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio)
-            self.icon_label.setPixmap(scaled)
+        if icon:
+            lbl_icon = QLabel()
+            lbl_icon.setPixmap(icon.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            layout.addWidget(lbl_icon)
+        elif is_group:
+             lbl_icon = QLabel("📁")
+             lbl_icon.setStyleSheet("font-size: 16px;")
+             layout.addWidget(lbl_icon)
         elif is_title:
-             self.icon_label.setText("T")
-             self.icon_label.setStyleSheet("font-weight: bold; font-size: 20px; border: 1px solid #ccc; padding: 5px;")
-        layout.addWidget(self.icon_label)
+             lbl_icon = QLabel("T")
+             lbl_icon.setStyleSheet("font-weight: bold; font-size: 20px; border: 1px solid #ccc; padding: 5px;")
+             layout.addWidget(lbl_icon)
+            
+        self.label = QLineEdit(text)
+        self.label.setReadOnly(True)
+        self.label.setFrame(False)
+        self.label.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         
-        # Title/Name
-        self.name_label = QLabel(text)
-        if is_title or is_group:
-            self.name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-            if is_group:
-                self.name_label.setStyleSheet("font-weight: bold; font-size: 14px; text-decoration: underline;")
-        layout.addWidget(self.name_label, 1) # stretch
+        # Initial Theme
+        self.update_style()
+             
+        layout.addWidget(self.label)
         
-        # Controls
-        self.copy_btn = QPushButton()
-        self.copy_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon)) 
-        self.copy_btn.setToolTip("Copy")
-        self.copy_btn.setFixedWidth(24)
-        self.copy_btn.clicked.connect(self.copy_clicked.emit)
-        layout.addWidget(self.copy_btn)
+        # Buttons (hidden by default)
+        self.btn_container = QWidget()
+        btn_layout = QHBoxLayout(self.btn_container)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(2)
+        
+        btn_edit = QPushButton("✎")
+        btn_edit.setFixedSize(20, 20)
+        btn_edit.setStyleSheet("border: none; color: gray;")
+        btn_edit.clicked.connect(self.edit_clicked.emit)
+        
+        btn_copy = QPushButton("C")
+        btn_copy.setFixedSize(20, 20)
+        btn_copy.clicked.connect(self.copy_clicked.emit)
 
-        self.edit_btn = QPushButton("✎")
-        self.edit_btn.setFixedWidth(24)
-        self.edit_btn.clicked.connect(self.edit_clicked.emit)
-        layout.addWidget(self.edit_btn)
+        btn_del = QPushButton("×")
+        btn_del.setFixedSize(20, 20)
+        btn_del.setStyleSheet("border: none; color: #e74c3c;")
+        btn_del.clicked.connect(self.delete_clicked.emit)
         
-        self.del_btn = QPushButton()
-        self.del_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_TrashIcon))
-        self.del_btn.setFixedWidth(24)
-        self.del_btn.setStyleSheet("color: red;") 
-        self.del_btn.clicked.connect(self.delete_clicked.emit)
-        layout.addWidget(self.del_btn)
+        btn_layout.addWidget(btn_edit)
+        btn_layout.addWidget(btn_copy)
+        btn_layout.addWidget(btn_del)
+        
+        layout.addWidget(self.btn_container)
+        self.btn_container.hide()
+        
+    def update_theme(self, theme):
+        self._current_theme = theme
+        self.update_style(theme)
 
+    def update_style(self, theme=None):
+        if theme is None:
+            theme = getattr(self, "_current_theme", "dark")
+            
+        color = "black" if theme == "light" else "white"
+        
+        # Explicitly matching QLineEdit selector to ensure specificity
+        base_style = "QLineEdit { border: none; background: transparent;"
+        
+        style = ""
+        if self.is_title:
+             style = f"{base_style} font-weight: bold; font-size: 14px; color: {color}; }}"
+        elif self.is_group:
+             style = f"{base_style} font-weight: bold; font-size: 14px; text-decoration: underline; color: {color}; }}"
+        else:
+             style = f"{base_style} color: {color}; }}"
+             
+        self.label.setStyleSheet(style)
+
+    def enterEvent(self, event):
+        self.btn_container.show()
+        super().enterEvent(event)
+        
+    def leaveEvent(self, event):
+        self.btn_container.hide()
+        super().leaveEvent(event)
+        
     def set_text(self, text):
-        self.name_label.setText(text)
-        
-    def set_icon(self, pixmap):
-        scaled = pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio)
-        self.icon_label.setPixmap(scaled)
+        self.label.setText(text)
+        self.label.setCursorPosition(0)
 
 class SidebarTree(QTreeWidget):
     widgets_refreshed = pyqtSignal()
@@ -551,8 +595,25 @@ class Sidebar(QWidget):
         else:
             super().keyPressEvent(event)
             
-    def set_theme(self, theme):
+    def update_theme(self, theme):
+        self._current_theme = theme
         if theme == "dark":
             self.guide_label.setStyleSheet("background: #444; color: white; padding: 5px; border-radius: 4px;")
+            self.tree.setStyleSheet("QTreeWidget { background-color: #2b2b2b; color: white; border: none; }")
         else:
             self.guide_label.setStyleSheet("background: #eee; color: black; padding: 5px; border-radius: 4px;")
+            self.tree.setStyleSheet("QTreeWidget { background-color: white; color: black; border: none; }")
+            
+        # Recursive update
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            self._update_item_style(root.child(i), theme)
+
+    def _update_item_style(self, item, theme):
+        widget = self.tree.itemWidget(item, 0)
+        if widget and hasattr(widget, "update_theme"):
+             widget.update_theme(theme)
+         
+        # Recursion
+        for i in range(item.childCount()):
+            self._update_item_style(item.child(i), theme)

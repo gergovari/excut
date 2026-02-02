@@ -1060,7 +1060,7 @@ class MainWindow(QMainWindow):
             app.setPalette(dark_palette)
         else:
             app.setPalette(QPalette()) 
-        self.sidebar.set_theme(theme)
+        self.sidebar.update_theme(theme)
             
     def toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
