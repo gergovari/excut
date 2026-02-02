@@ -497,23 +497,32 @@ class Sidebar(QWidget):
 
     def copy_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole)
+        # Deep copy data structure manually to ensure control over types
         new_data = data.copy()
+        
         if "parts" in new_data:
-            # Manually copy parts to ensure QPixmaps are duplicated
+            # Manually copy parts to ensure proper structure (list of dicts or compatible tuples)
             new_parts = []
             for part in new_data["parts"]:
-                # part is usually (pixmap, metadata_dict)
-                if isinstance(part, (list, tuple)) and len(part) == 2:
+                # Handle Tuple (Pixmap, Meta)
+                if isinstance(part, (list, tuple)) and len(part) >= 2:
                     pix = part[0]
-                    meta = part[1].copy()
+                    meta = part[1].copy() if isinstance(part[1], dict) else {}
+                    
                     if isinstance(pix, QPixmap):
-                        new_parts.append((QPixmap(pix), meta)) # Explicit QPixmap copy
+                        new_parts.append((QPixmap(pix), meta)) # Copy QPixmap
                     else:
                         new_parts.append((pix, meta))
+                        
+                # Handle Dict (Metadata only)
+                elif isinstance(part, dict):
+                    new_parts.append(part.copy())
+                
+                # Fallback
                 else:
-                    # Fallback
                     import copy
                     new_parts.append(copy.deepcopy(part))
+                    
             new_data["parts"] = new_parts
             
         new_item = QTreeWidgetItem()

@@ -626,16 +626,49 @@ class MainWindow(QMainWindow):
     def _item_to_dict(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole).copy()
         if "content" in data: del data["content"]
+
+        
         
         # Recursively convert QRects in parts
         if "parts" in data:
             new_parts = []
             for p in data["parts"]:
-                np = p.copy()
-                if "rect" in np and isinstance(np["rect"], QRect):
-                    r = np["rect"]
-                    np["rect"] = [r.x(), r.y(), r.width(), r.height()]
-                new_parts.append(np)
+                # p can be dict or tuple (pixmap, meta_dict)
+                meta = p
+                if isinstance(p, (list, tuple)) and len(p) > 1:
+                    # If it's a tuple, we only care about metadata for snapshotting/saving
+                    # The content is usually ignored or reconstructed
+                    # Wait, for Undo/Redo IN MEMORY, we want to KEEP the Pixmap if possible?
+                    # The undo stack uses these snapshots. 
+                    # If we discard the pixmap here, _restore_sidebar_items must RECONSTRUCT it.
+                    # _restore_sidebar_items calls _reconstruct_pixmap which is expensive but correct.
+                    # AND _reconstruct_pixmap handles both tuples and dicts.
+                    # BUT `_get_sidebar_state` is ALSO used for `save_project` (disk). 
+                    # `_save_to_path` helper CALLS `_get_sidebar_state`.
+                    # So `_item_to_dict` MUST return something JSON-serializable-friendly OR be cleaned later.
+                    # `_save_to_path` calls `save_project`. `save_project` iterates items.
+                    # `save_project` EXPECTS `parts` to be a list of dicts with 'rect'.
+                    # It copies the item and does `np.copy()`. If `np` is a tuple inside `save_project`, it will CRASH there too!
+                    # Checked project_io.py:
+                    # line 69: for p in s_item["parts"]: np = p.copy()
+                    # YES, `save_project` will crash if `parts` contains tuples because tuples don't have .copy().
+                    
+                    # So `_item_to_dict` acts as a sanitizer for the sidebar's "complex" state into "simple" state (dicts).
+                    # Ideally, `_item_to_dict` should STRIP the pixmap from the tuple and return just the metadata dict.
+                    meta = p[1]
+                
+                # Check for dict type before copying
+                if isinstance(meta, dict):
+                    np = meta.copy()
+                    if "rect" in np:
+                        r = np["rect"]
+                        if isinstance(r, QRect):
+                            np["rect"] = [r.x(), r.y(), r.width(), r.height()]
+                    new_parts.append(np)
+                else:
+                     # Fallback? Should not happen if data is valid
+                     pass
+
             data["parts"] = new_parts
         
         children = []
@@ -901,8 +934,12 @@ class MainWindow(QMainWindow):
                  self.show_current_page()
         else:
              state_to_restore = item
-             self.current_state_snapshot = state_to_restore
+             
+             # Save CURRENT state to Redo Stack BEFORE restoring old state
              self.redo_stack.append(self.current_state_snapshot)
+             
+             # Now Update Current to be the Restored state
+             self.current_state_snapshot = state_to_restore
         
              self.sidebar.tree.blockSignals(True)
              self.sidebar.tree.clear()
@@ -929,18 +966,26 @@ class MainWindow(QMainWindow):
         self.current_state_snapshot = state_to_restore
 
     def _restore_sidebar_items(self, items, parent_item=None):
-        for data in items:
+        import copy
+        # Deep copy the items list to prevent mutation of the undo stack
+        # This is critical because we might modify 'rect' types in place below if we aren't careful,
+        # or if previous logic did. But strictly, we should work on a copy.
+        items_copy = copy.deepcopy(items)
+        
+        for idx, data in enumerate(items_copy):
             # FIX: Ensure nested rects are deserialized if gui.py handles it
-            # project_io.py handles rect deserialization for root items, but recursively?
-            # project_io.py implementation iterated root items only.
-            # So nested items might still have lists instead of QRects.
-            # We must verify and convert here for children.
-            
             if "parts" in data:
                 for p in data["parts"]:
-                    if "rect" in p and isinstance(p["rect"], list):
-                        x,y,w,h = p["rect"]
-                        p["rect"] = QRect(x,y,w,h)
+                    # Handle both Dict and Tuple cases for safety
+                    meta = None
+                    if isinstance(p, dict):
+                         meta = p
+                    elif isinstance(p, (list, tuple)) and len(p) > 1 and isinstance(p[1], dict):
+                         meta = p[1]
+                         
+                    if meta and "rect" in meta and isinstance(meta["rect"], list):
+                        x,y,w,h = meta["rect"]
+                        meta["rect"] = QRect(x,y,w,h)
 
             if data["type"] == "group":
                 from PyQt6.QtWidgets import QTreeWidgetItem
@@ -966,24 +1011,34 @@ class MainWindow(QMainWindow):
                 parts = data.get("parts", [])
                 clean_parts = []
                 for p in parts:
-                    cp = p.copy()
-                    if "rect" in cp and isinstance(cp["rect"], list) and len(cp["rect"]) == 4:
-                        cp["rect"] = QRect(*cp["rect"])
-                    clean_parts.append(cp)
+                    # Deep copy the part data to ensure independence
+                    if isinstance(p, (list, tuple)):
+                         # Reconstruct tuple (pix, meta)
+                         pix_ref = p[0]
+                         meta_copy = p[1].copy() if len(p) > 1 and isinstance(p[1], dict) else {}
+                         # We don't necessarily need to clone the QPixmap here if reconstruction handles it
+                         clean_parts.append((pix_ref, meta_copy))
+                    else:
+                         # Full deepcopy for dicts
+                         clean_parts.append(copy.deepcopy(p))
                 
                 pix = self._reconstruct_pixmap(clean_parts)
                 if pix:
                     from PyQt6.QtWidgets import QTreeWidgetItem
                     item = QTreeWidgetItem()
+                    # Store completely FRESH data dict
                     item_data = {"type": "image", "content": pix, "title": data.get("title", ""), "parts": clean_parts}
                     item.setData(0, Qt.ItemDataRole.UserRole, item_data)
                     
                     if parent_item:
                         parent_item.addChild(item)
                     else:
-                        self.sidebar.tree.invisibleRootItem().addChild(item)
+                        root = self.sidebar.tree.invisibleRootItem()
+                        root.addChild(item)
                         
                     self.sidebar._setup_item_widget(item, data.get("title", ""), icon=pix)
+                else:
+                     print(f"WARNING: Failed to restore item '{data.get('title', 'Unknown')}'. invalid parts data.")
                     
             elif data["type"] == "title":
                  from PyQt6.QtWidgets import QTreeWidgetItem
@@ -997,18 +1052,38 @@ class MainWindow(QMainWindow):
                      
                  self.sidebar._setup_item_widget(item, data["title"], is_title=True)
 
-    def _reconstruct_pixmap(self, parts_meta):
-        if not parts_meta: return None
-        parts = []
-        for p in parts_meta:
-            pidx = p['page_idx']
-            rect = p['rect']
-            if 0 <= pidx < len(self.pages):
-                img_data, _, _ = self.pages[pidx]
-                page_img = QImage.fromData(img_data)
-                page_pix = QPixmap.fromImage(page_img)
-                parts.append(page_pix.copy(rect))
-        return self.combine_parts(parts)
+    def _reconstruct_pixmap(self, parts_data):
+        if not parts_data: return None
+        pixmaps = []
+        for i, p in enumerate(parts_data):
+            # Check if it's a tuple (Pixmap, Meta) - from Clone/Manual Copy
+            if isinstance(p, (list, tuple)) and len(p) >= 1 and isinstance(p[0], QPixmap):
+                pixmaps.append(p[0])
+                continue
+                
+            # Otherwise assume it's a Metadata Dict - from Load/Undo
+            meta = p
+            if isinstance(p, (list, tuple)) and len(p) > 1:
+                meta = p[1]
+            
+            if isinstance(meta, dict):
+                pidx = meta.get('page_idx', -1)
+                rect = meta.get('rect')
+                
+                if 0 <= pidx < len(self.pages) and rect:
+                    img_data, _, _ = self.pages[pidx]
+                    # Optimization: Cache QImages?
+                    page_img = QImage.fromData(img_data)
+                    
+                    page_pix = QPixmap.fromImage(page_img)
+                    cropped = page_pix.copy(rect)
+                    
+                    pixmaps.append(cropped)
+                    
+        if not pixmaps:
+            return None
+            
+        return self.combine_parts(pixmaps)
 
     def load_data(self):
         if not self.input_paths:
@@ -1162,6 +1237,7 @@ class MainWindow(QMainWindow):
                  self.pending_parts = []
 
     def combine_parts(self, parts):
+        if not parts: return None
         if len(parts) == 1: return parts[0]
         total_h = sum(p.height() for p in parts)
         max_w = max(p.width() for p in parts)
