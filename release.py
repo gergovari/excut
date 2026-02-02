@@ -53,13 +53,13 @@ def main():
     # 2. Update files
     print("📝 Updating version in build scripts...")
     update_version_in_file(APPIMAGE_SCRIPT, major, new_minor)
-    update_version_in_file(WINDOWS_SCRIPT, major, new_minor)
+    # update_version_in_file(WINDOWS_SCRIPT, major, new_minor)
     
     # 3. Git commit and tag (Optional but recommended for releases)
     # Checking if we are in a git repo
     if os.path.isdir(".git"):
         print("commit changes...")
-        run_command(["git", "add", APPIMAGE_SCRIPT, WINDOWS_SCRIPT])
+        run_command(["git", "add", APPIMAGE_SCRIPT])
         run_command(["git", "commit", "-m", f"Bump version to {new_version_str}"])
     
     # Setup Environment with VENV
@@ -71,15 +71,15 @@ def main():
     print("🔨 Running AppImage Build...")
     run_command(["./packaging/build/appimage.sh"], env=env)
     
-    print("🔨 Running Windows Build...")
-    run_command(["./packaging/build/windows.sh"], env=env)
+    # print("🔨 Running Windows Build...")
+    # run_command(["./packaging/build/windows.sh"], env=env)
     
     # 5. Create GitHub Release
     print(f"📦 Creating GitHub Release {new_version_str}...")
     
     dist_files = [
         f"dist/ExCut-x86_64-{new_version_str}.AppImage",
-        f"dist/ExCut-x86_64-{new_version_str}.exe"
+        # f"dist/ExCut-x86_64-{new_version_str}.exe"
     ]
     
     # Verify files exist

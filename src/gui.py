@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QPushButton, QApplication, QLabel
 )
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QRectF
-from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette
+from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage
 from .canvas import ImageCanvas
 from .sidebar import Sidebar
 from .pdf_utils import load_input_files, generate_output_pdf
@@ -136,9 +136,29 @@ class MainWindow(QMainWindow):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.layout.addWidget(self.splitter)
         
-        # Canvas
+        # Canvas container with controls
+        self.canvas_container = QWidget()
+        self.canvas_layout = QVBoxLayout(self.canvas_container)
+        self.canvas_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.canvas = ImageCanvas()
-        self.splitter.addWidget(self.canvas)
+        self.canvas_layout.addWidget(self.canvas)
+        
+        # Rotation Controls
+        rotation_layout = QHBoxLayout()
+        rotation_layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.btn_rotate_left = QPushButton("↶ Rotate Left")
+        self.btn_rotate_left.clicked.connect(lambda: self.rotate_page('left'))
+        rotation_layout.addWidget(self.btn_rotate_left)
+        
+        self.btn_rotate_right = QPushButton("Rotate Right ↷")
+        self.btn_rotate_right.clicked.connect(lambda: self.rotate_page('right'))
+        rotation_layout.addWidget(self.btn_rotate_right)
+        
+        self.canvas_layout.addLayout(rotation_layout)
+        
+        self.splitter.addWidget(self.canvas_container)
         
         # Sidebar
         self.sidebar = Sidebar()
@@ -236,6 +256,83 @@ class MainWindow(QMainWindow):
         if self.current_idx < len(self.pages) - 1:
             self.current_idx += 1
             self.show_current_page()
+
+    def rotate_page(self, direction):
+        if not self.pages:
+            return
+            
+        img_data, fname, pnum = self.pages[self.current_idx]
+        
+        # Geometry before rotation
+        old_image = QImage.fromData(img_data)
+        W = old_image.width()
+        H = old_image.height()
+        
+        # Rotate
+        transform = QTransform()
+        if direction == 'left':
+            transform.rotate(-90)
+        else:
+            transform.rotate(90)
+            
+        new_image = old_image.transformed(transform)
+        
+        # Save back to bytes
+        from PyQt6.QtCore import QBuffer, QIODevice
+        buff = QBuffer()
+        buff.open(QIODevice.OpenModeFlag.ReadWrite)
+        new_image.save(buff, "PNG")
+        new_img_data = buff.data().data()
+        
+        # Update data
+        self.pages[self.current_idx] = (new_img_data, fname, pnum)
+        
+        # Update existing cuts (Sidebar Items)
+        # We need to rotate the rects so they match the new image orientation
+        items_count = self.sidebar.list_widget.count()
+        for i in range(items_count):
+            item = self.sidebar.list_widget.item(i)
+            data = item.data(Qt.ItemDataRole.UserRole)
+            
+            if 'parts' in data:
+                updated_parts = []
+                changed = False
+                for part in data['parts']:
+                    if part['page_idx'] == self.current_idx:
+                        # Transform Rect
+                        r = part['rect'] # QRect
+                        x, y, w, h = r.x(), r.y(), r.width(), r.height()
+                        
+                        if direction == 'left': # CCW
+                            # (x, y) -> (y, W - x)
+                            # But for a rect (x,y,w,h):
+                            # new_x = y
+                            # new_y = W - (x + w)
+                            new_x = y
+                            new_y = W - (x + w)
+                            new_w = h
+                            new_h = w
+                        else: # CW
+                            # (x, y) -> (H - y, x)
+                            # For rect:
+                            # new_x = H - (y + h)
+                            # new_y = x
+                            new_x = H - (y + h)
+                            new_y = x
+                            new_w = h
+                            new_h = w
+                            
+                        new_rect = QRect(new_x, new_y, new_w, new_h)
+                        part['rect'] = new_rect
+                        changed = True
+                    updated_parts.append(part)
+                
+                if changed:
+                    data['parts'] = updated_parts
+                    item.setData(Qt.ItemDataRole.UserRole, data)
+        
+        # Refresh view
+        self.show_current_page()
 
     def cut_selection(self, is_partial):
         selection = self.canvas.get_selection()
