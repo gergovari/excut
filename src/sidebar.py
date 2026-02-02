@@ -2,10 +2,29 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QLabel, 
     QPushButton, QHBoxLayout, QInputDialog, QMenu, QDialog, QScrollArea,
     QAbstractItemView, QFrame, QApplication, QCheckBox, QDialogButtonBox,
-    QLineEdit
+    QLineEdit, QStyle
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint
-from PyQt6.QtGui import QPixmap, QIcon, QAction, QDrag
+from PyQt6.QtGui import QPixmap, QIcon, QAction, QDrag, QPainter, QColor, QPen
+
+def draw_pen_icon():
+    pix = QPixmap(24, 24)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    
+    # Draw simple pen
+    painter.setPen(QPen(QColor("#d4d4d4"), 2))
+    painter.translate(12, 12)
+    painter.rotate(45)
+    # Body
+    painter.drawRect(-3, -8, 6, 12)
+    # Tip
+    painter.drawLine(-3, 4, 0, 8)
+    painter.drawLine(3, 4, 0, 8)
+    
+    painter.end()
+    return QIcon(pix)
 
 class ImageViewerDialog(QDialog):
     def __init__(self, pixmap, parent=None):
@@ -54,7 +73,7 @@ class DragHandle(QLabel):
         super().__init__("☰", parent)
         self.tree = tree
         self.item = item
-        self.setStyleSheet("color: #888; font-size: 16px; font-weight: bold; cursor: move; margin-right: 5px;")
+        self.setStyleSheet("color: #888; font-size: 16px; font-weight: bold; cursor: move; margin-right: 2px; margin-left: 0px;")
         self.drag_start_pos = None
 
     def mousePressEvent(self, event):
@@ -94,8 +113,11 @@ class SidebarItemWidget(QWidget):
         self.is_group = is_group
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(5)
+        layout.setContentsMargins(0, 2, 0, 2) # Zero horizontal, slight vertical
+        layout.setSpacing(4)
+        
+        self.setMinimumHeight(40) # Ensure enough height for text
+
         
         # Drag Handle
         self.drag_label = DragHandle(tree, item, self)
@@ -118,30 +140,46 @@ class SidebarItemWidget(QWidget):
         self.label.setReadOnly(True)
         self.label.setFrame(False)
         self.label.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) # Pass clicks/drags to Tree
         
         # Initial Theme
         self.update_style()
              
         layout.addWidget(self.label)
         
-        # Buttons (hidden by default)
+        # Buttons (always visible)
         self.btn_container = QWidget()
         btn_layout = QHBoxLayout(self.btn_container)
         btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(2)
+        btn_layout.setSpacing(4)
         
-        btn_edit = QPushButton("✎")
-        btn_edit.setFixedSize(20, 20)
-        btn_edit.setStyleSheet("border: none; color: gray;")
+        style = QApplication.style()
+        
+        btn_edit = QPushButton()
+        btn_edit.setIcon(draw_pen_icon())
+        
+        edit_tooltip = "Edit (Double-click)"
+        if self.is_title or self.is_group:
+            edit_tooltip = "Rename (F2)"
+            
+        btn_edit.setToolTip(edit_tooltip)
+        btn_edit.setFixedSize(24, 24)
+        btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_edit.clicked.connect(self.edit_clicked.emit)
         
-        btn_copy = QPushButton("C")
-        btn_copy.setFixedSize(20, 20)
+        btn_copy = QPushButton()
+        btn_copy.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)) # File look
+        btn_copy.setToolTip("Duplicate")
+        btn_copy.setFixedSize(24, 24)
+        btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_copy.clicked.connect(self.copy_clicked.emit)
-
-        btn_del = QPushButton("×")
-        btn_del.setFixedSize(20, 20)
-        btn_del.setStyleSheet("border: none; color: #e74c3c;")
+        
+        btn_del = QPushButton()
+        btn_del.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon)) # Trash
+        btn_del.setToolTip("Delete (Del)")
+        btn_del.setFixedSize(24, 24)
+        btn_del.setProperty("class", "danger-btn")
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_del.clicked.connect(self.delete_clicked.emit)
         
         btn_layout.addWidget(btn_edit)
@@ -149,7 +187,7 @@ class SidebarItemWidget(QWidget):
         btn_layout.addWidget(btn_del)
         
         layout.addWidget(self.btn_container)
-        self.btn_container.hide()
+        # Buttons always visible
         
     def update_theme(self, theme):
         self._current_theme = theme
@@ -174,12 +212,11 @@ class SidebarItemWidget(QWidget):
              
         self.label.setStyleSheet(style)
 
+    # Removed enterEvent/leaveEvent to keep buttons visible
     def enterEvent(self, event):
-        self.btn_container.show()
         super().enterEvent(event)
         
     def leaveEvent(self, event):
-        self.btn_container.hide()
         super().leaveEvent(event)
         
     def set_text(self, text):
@@ -406,6 +443,20 @@ class Sidebar(QWidget):
             self.state_changed.emit()
 
     def _setup_item_widget(self, item, text, icon=None, is_group=False, is_title=False):
+        # Set Flags correcty for Drag/Drop
+        flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsDragEnabled
+        
+        # Only Groups should allow "Drop On" (nesting)
+        # All items allow "Drop Between" (reordering) implied by View properties
+        if is_group:
+            flags |= Qt.ItemFlag.ItemIsDropEnabled
+        else:
+            # Explicitly disable dropping ON a title/exercise
+            # This forces the indicator to be Above or Below
+             flags &= ~Qt.ItemFlag.ItemIsDropEnabled
+             
+        item.setFlags(flags)
+        
         widget = SidebarItemWidget(text, self.tree, item, icon, is_title=is_title, is_group=is_group)
         widget.delete_clicked.connect(lambda: self.delete_item(item))
         widget.edit_clicked.connect(lambda: self.edit_item(item, widget))
@@ -446,10 +497,24 @@ class Sidebar(QWidget):
 
     def copy_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole)
-        import copy
         new_data = data.copy()
         if "parts" in new_data:
-            new_data["parts"] = copy.deepcopy(new_data["parts"])
+            # Manually copy parts to ensure QPixmaps are duplicated
+            new_parts = []
+            for part in new_data["parts"]:
+                # part is usually (pixmap, metadata_dict)
+                if isinstance(part, (list, tuple)) and len(part) == 2:
+                    pix = part[0]
+                    meta = part[1].copy()
+                    if isinstance(pix, QPixmap):
+                        new_parts.append((QPixmap(pix), meta)) # Explicit QPixmap copy
+                    else:
+                        new_parts.append((pix, meta))
+                else:
+                    # Fallback
+                    import copy
+                    new_parts.append(copy.deepcopy(part))
+            new_data["parts"] = new_parts
             
         new_item = QTreeWidgetItem()
         new_item.setData(0, Qt.ItemDataRole.UserRole, new_data)

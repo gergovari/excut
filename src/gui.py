@@ -9,6 +9,7 @@ from .canvas import ImageCanvas
 from .sidebar import Sidebar
 from .pdf_utils import load_input_files, generate_output_pdf
 from .project_io import save_project, load_project
+from .styles import get_stylesheet
 from .preview import PreviewDialog
 import sys
 import io
@@ -1040,26 +1041,11 @@ class MainWindow(QMainWindow):
         progress.close()
 
     def apply_theme(self, theme):
+        # Use Modern QSS
         app = QApplication.instance()
-        if theme == "dark":
-            app.setStyle("Fusion")
-            dark_palette = QPalette()
-            dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
-            dark_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
-            dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
-            dark_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
-            dark_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-            dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-            dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-            dark_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
-            app.setPalette(dark_palette)
-        else:
-            app.setPalette(QPalette()) 
+        if app:
+            app.setStyleSheet(get_stylesheet(theme))
+            
         self.sidebar.update_theme(theme)
             
     def toggle_theme(self):
@@ -1086,6 +1072,46 @@ class MainWindow(QMainWindow):
         if self.current_idx < len(self.pages) - 1:
             self.current_idx += 1
             self.show_current_page()
+            
+    def rotate_page(self, direction):
+        if not (0 <= self.current_idx < len(self.pages)):
+            return
+            
+        # 1. Save state for Undo
+        current_data = self.pages[self.current_idx] # (img_data, fname, pnum)
+        self.undo_stack.append({
+            'type': 'rotate', 
+            'page_idx': self.current_idx, 
+            'data': current_data
+        })
+        self.redo_stack.clear()
+        
+        # 2. Rotate
+        img, fname, pnum = current_data
+        
+        # Handle bytes vs QPixmap/QImage
+        if isinstance(img, bytes):
+            qimg = QImage.fromData(img)
+        elif isinstance(img, QPixmap):
+            qimg = img.toImage()
+        else:
+            qimg = img
+            
+        angle = 90 if direction == 'right' else -90
+        transform = QTransform().rotate(angle)
+        new_qimg = qimg.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+        
+        # Convert back to bytes? Or keep as QImage?
+        # Canvas accepts QImage/QPixmap. Keeping as QPixmap is efficient for display.
+        # But if anything else expects bytes (e.g. deepcopying?), it might be tricky.
+        # Let's check if we should convert back to bytes for consistency.
+        # Converting QImage to bytes (PNG) is expensive.
+        # Let's store as QPixmap for performance.
+        new_img = QPixmap.fromImage(new_qimg)
+        
+        # 3. Update
+        self.pages[self.current_idx] = (new_img, fname, pnum)
+        self.show_current_page()
             
 
 

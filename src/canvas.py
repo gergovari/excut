@@ -146,12 +146,27 @@ class ImageCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     def set_image(self, image_data):
-        # Clear existing items except the pixmap_item itself if it's being reused
-        # If we want to clear all items including rects, we'd need to manage that
-        # For now, assume this just sets the background image.
-        image = QImage.fromData(image_data)
-        pixmap = QPixmap.fromImage(image)
-        self.pixmap_item.setPixmap(pixmap)
+        self.pixmap_item = None
+        self.current_selection_rect = None
+        self.selection_item = None
+        self.start_pos = None
+        self.scene.clear()
+        
+        if image_data is None:
+            return
+            
+        if isinstance(image_data, QPixmap):
+            pixmap = image_data
+        elif isinstance(image_data, QImage):
+            pixmap = QPixmap.fromImage(image_data)
+        else:
+            # Assume bytes
+            image = QImage.fromData(image_data)
+            if image.isNull():
+                return
+            pixmap = QPixmap.fromImage(image)
+            
+        self.pixmap_item = self.scene.addPixmap(pixmap)
         self.scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
         self.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -171,6 +186,16 @@ class ImageCanvas(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             # Map view pos to scene pos for origin
             self.origin = self.mapToScene(event.pos())
+            
+            # Lazy init selection item
+            if not self.selection_item:
+                 self.selection_item = QGraphicsRectItem()
+                 self.selection_item.setPen(QPen(QColor(255, 0, 0), 2, Qt.PenStyle.DashLine))
+                 self.selection_item.setBrush(QBrush(QColor(255, 0, 0, 50)))
+                 self.selection_item.setZValue(100)
+                 self.scene.addItem(self.selection_item)
+            elif self.selection_item.scene() != self.scene:
+                 self.scene.addItem(self.selection_item)
             
             self.selection_item.setRect(QRectF(self.origin, QSizeF()))
             self.selection_item.show()
@@ -221,5 +246,6 @@ class ImageCanvas(QGraphicsView):
         return None
 
     def clear_selection(self):
-        self.selection_item.hide()
+        if self.selection_item:
+            self.selection_item.hide()
         self.current_selection_rect = None
