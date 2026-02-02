@@ -421,10 +421,13 @@ class Sidebar(QWidget):
             # Recurse
             self._recursive_restore(item)
 
-    def toggle_sticky_mode(self, event):
-        self.sticky_mode = not self.sticky_mode
+    def set_sticky_mode(self, enabled):
+        self.sticky_mode = enabled
         border = "3px solid #e74c3c" if self.sticky_mode else "2px dashed #f39c12"
         self.pending_label.setStyleSheet(f"border: {border}; padding: 5px; background-color: #fcf3cf;")
+
+    def toggle_sticky_mode(self, event):
+        self.set_sticky_mode(not self.sticky_mode)
 
     def get_insert_location(self):
         selected = self.tree.selectedItems()

@@ -563,6 +563,7 @@ class MainWindow(QMainWindow):
                 "bg_image": self.bg_image,
                 "bg_pattern": self.bg_pattern,
                 "current_idx": self.current_idx,
+                "sticky_mode": self.sidebar.sticky_mode,
                 "pending_parts": pending_state,
                 "undo_stack": self._serialize_stack(self.undo_stack),
                 "redo_stack": self._serialize_stack(self.redo_stack)
@@ -742,6 +743,9 @@ class MainWindow(QMainWindow):
             
             if "current_idx" in metadata:
                 self.current_idx = metadata["current_idx"]
+            
+            if "sticky_mode" in metadata:
+                self.sidebar.set_sticky_mode(metadata["sticky_mode"])
                 
             self.show_current_page()
             
@@ -831,6 +835,9 @@ class MainWindow(QMainWindow):
             
             if "current_idx" in metadata:
                 self.current_idx = metadata["current_idx"]
+            
+            if "sticky_mode" in metadata:
+                self.sidebar.set_sticky_mode(metadata["sticky_mode"])
                 
             self.show_current_page()
             
@@ -964,16 +971,30 @@ class MainWindow(QMainWindow):
         if not self.redo_stack:
             return
 
-        state_to_restore = self.redo_stack.pop()
-        self.undo_stack.append(self.current_state_snapshot)
+        item = self.redo_stack.pop()
         
-        self.sidebar.tree.blockSignals(True)
-        self.sidebar.tree.clear()
-        self._restore_sidebar_items(state_to_restore)
-        self.sidebar.tree.blockSignals(False)
-        self.sidebar.restore_widgets()
-        
-        self.current_state_snapshot = state_to_restore
+        if isinstance(item, dict) and item.get('type') == 'rotate':
+             page_idx = item['page_idx']
+             redo_data = item['data'] 
+             
+             # Save current to Undo
+             current_data = self.pages[page_idx]
+             self.undo_stack.append({'type': 'rotate', 'page_idx': page_idx, 'data': current_data})
+             
+             self.pages[page_idx] = redo_data
+             if self.current_idx == page_idx:
+                 self.show_current_page()
+        else:
+             state_to_restore = item
+             self.undo_stack.append(self.current_state_snapshot)
+             
+             self.sidebar.tree.blockSignals(True)
+             self.sidebar.tree.clear()
+             self._restore_sidebar_items(state_to_restore)
+             self.sidebar.tree.blockSignals(False)
+             self.sidebar.restore_widgets()
+             
+             self.current_state_snapshot = state_to_restore
 
     def _restore_sidebar_items(self, items, parent_item=None):
         import copy
