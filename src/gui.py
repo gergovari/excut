@@ -341,6 +341,8 @@ class MainWindow(QMainWindow):
         self.resize_handle_size = 10
         self.current_editing_item = None
         
+        self.unsaved_changes = False
+        
         self.setWindowTitle("ExCut")
         self.resize(1200, 800)
         
@@ -488,6 +490,7 @@ class MainWindow(QMainWindow):
     def discard_pending(self):
         self.pending_parts = []
         self.sidebar.remove_pending()
+        self.set_unsaved_changes(True)
 
     def open_settings(self):
         dlg = SettingsDialog(self.output_file, str(self.page_size), self.theme, self.bg_image, self.bg_pattern, self)
@@ -503,12 +506,14 @@ class MainWindow(QMainWindow):
                 self.theme = new_theme
                 self.apply_theme(self.theme)
             
+            self.set_unsaved_changes(True)
             QMessageBox.information(self, "Settings", "Settings updated.")
 
     def add_input_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Add Files", "", "Images/PDFs (*.pdf *.png *.jpg *.jpeg *.bmp)")
         if files:
             self.input_paths.extend(files)
+            self.set_unsaved_changes(True)
             progress = QProgressDialog("Loading files...", "Cancel", 0, 0, self)
             progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.show()
@@ -521,7 +526,7 @@ class MainWindow(QMainWindow):
                 if len(self.pages) > 0 and self.canvas.pixmap_item.pixmap().isNull():
                     self.show_current_page()
                 else:
-                    self.setWindowTitle(f"ExCut - {self.pages[self.current_idx][1]} (Page {self.pages[self.current_idx][2]}) [{self.current_idx + 1}/{len(self.pages)}]")
+                    self.update_window_title()
                     
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load files: {e}")
@@ -572,6 +577,7 @@ class MainWindow(QMainWindow):
             
             save_project(path, self.input_paths, items_state, metadata=meta)
             self.current_project_path = path
+            self.set_unsaved_changes(False)
             QMessageBox.information(self, "Success", f"Project saved to {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
@@ -868,6 +874,7 @@ class MainWindow(QMainWindow):
             self.current_state_snapshot = self._get_sidebar_state()
             self.undo_stack = []
             self.redo_stack = []
+            self.set_unsaved_changes(False)
             
          except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
@@ -880,6 +887,7 @@ class MainWindow(QMainWindow):
         self.undo_stack.append(self.current_state_snapshot)
         self.current_state_snapshot = new_state
         self.redo_stack.clear() # Invalidated
+        self.set_unsaved_changes(True)
 
     def push_canvas_state(self):
         if not self.current_editing_item:
@@ -1148,6 +1156,7 @@ class MainWindow(QMainWindow):
             self.undo_stack.clear()
             self.redo_stack.clear()
             self.current_state_snapshot = self._get_sidebar_state()
+            self.set_unsaved_changes(False)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load data: {e}")
@@ -1169,12 +1178,12 @@ class MainWindow(QMainWindow):
         if 0 <= self.current_idx < len(self.pages):
             img_data, fname, pnum = self.pages[self.current_idx]
             self.canvas.set_image(img_data)
-            self.setWindowTitle(f"ExCut - {fname} (Page {pnum}) [{self.current_idx + 1}/{len(self.pages)}]")
+            self.update_window_title()
             self.canvas.clear_selection()
             self.canvas.setFocus()
         else:
             self.canvas.set_image(None)
-            self.setWindowTitle("ExCut - No Files Loaded")
+            self.update_window_title()
 
     def prev_page(self):
         if self.current_idx > 0:
@@ -1224,6 +1233,7 @@ class MainWindow(QMainWindow):
         
         # 3. Update
         self.pages[self.current_idx] = (new_img, fname, pnum)
+        self.set_unsaved_changes(True)
         self.show_current_page()
             
 
@@ -1234,6 +1244,8 @@ class MainWindow(QMainWindow):
         
         if not selection and not is_partial and not self.pending_parts:
             return
+            
+        self.set_unsaved_changes(True)
 
         metadata = None
         if selection:
@@ -1377,3 +1389,55 @@ class MainWindow(QMainWindow):
                 self.cut_selection(is_partial=False)
         else:
             super().keyPressEvent(event)
+
+    def set_unsaved_changes(self, dirty=True):
+        if self.unsaved_changes != dirty:
+            self.unsaved_changes = dirty
+            self.update_window_title()
+
+    def update_window_title(self):
+        title = "ExCut"
+        
+        if 0 <= self.current_idx < len(self.pages):
+            _, fname, pnum = self.pages[self.current_idx]
+            title = f"ExCut - {fname} (Page {pnum}) [{self.current_idx + 1}/{len(self.pages)}]"
+            if hasattr(self, 'current_project_path') and self.current_project_path:
+                 pass # Could append project name if desired, but sticking to file focus for now
+        elif self.pages:
+             # Should not happen if filtered correctly but fallback
+             title = f"ExCut - {len(self.pages)} Pages Loaded"
+        else:
+             title = "ExCut - No Files Loaded"
+
+        if self.unsaved_changes:
+            title += " *"
+            
+        self.setWindowTitle(title)
+
+    def closeEvent(self, event):
+        if self.unsaved_changes:
+            reply = QMessageBox.question(
+                self, 
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save them before quitting?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save
+            )
+            
+            if reply == QMessageBox.StandardButton.Save:
+                # Save
+                self.save_current_project()
+                # Check if save was successful? save_current_project handles UI but doesn't return success/fail clearly
+                # But it updates current_project_path and presumably unsaved_changes if we hook it up.
+                # Let's verify if unsaved_changes is cleared.
+                if self.unsaved_changes: 
+                    # Save failed or cancelled inside save dialog
+                    event.ignore()
+                    return
+                event.accept()
+            elif reply == QMessageBox.StandardButton.Discard:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
