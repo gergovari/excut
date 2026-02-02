@@ -251,7 +251,7 @@ class RecropDialog(QDialog):
     def get_result(self):
         self._commit_current_page_changes()
         parts_pixmaps = []
-        sorted_meta = sorted(self.current_parts_meta, key=lambda x: (x['page_idx'], x['rect'].y()))
+        sorted_meta = sorted(self.current_parts_meta, key=lambda x: x['page_idx'])
         
         for p in sorted_meta:
             pidx = p['page_idx']
