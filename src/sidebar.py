@@ -73,7 +73,8 @@ class DragHandle(QLabel):
         super().__init__("☰", parent)
         self.tree = tree
         self.item = item
-        self.setStyleSheet("color: #888; font-size: 16px; font-weight: bold; cursor: move; margin-right: 2px; margin-left: 0px;")
+        self.setStyleSheet("color: #888; font-size: 16px; font-weight: bold; margin-right: 2px; margin-left: 0px;")
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
         self.drag_start_pos = None
 
     def mousePressEvent(self, event):

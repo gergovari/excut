@@ -246,6 +246,8 @@ class RecropDialog(QDialog):
             self.rect_items.remove(item)
         self.update_numbers()
 
+
+
     def get_result(self):
         self._commit_current_page_changes()
         parts_pixmaps = []
@@ -255,8 +257,16 @@ class RecropDialog(QDialog):
             pidx = p['page_idx']
             rect = p['rect']
             img_data, _, _ = self.full_pages[pidx]
-            page_img = QImage.fromData(img_data)
-            page_pix = QPixmap.fromImage(page_img)
+            
+            if isinstance(img_data, QPixmap):
+                page_pix = img_data
+            elif isinstance(img_data, QImage):
+                page_pix = QPixmap.fromImage(img_data)
+            else:
+                # Assume bytes
+                page_img = QImage.fromData(img_data)
+                page_pix = QPixmap.fromImage(page_img)
+                
             parts_pixmaps.append(page_pix.copy(rect))
         
         return parts_pixmaps, sorted_meta
@@ -1072,10 +1082,16 @@ class MainWindow(QMainWindow):
                 
                 if 0 <= pidx < len(self.pages) and rect:
                     img_data, _, _ = self.pages[pidx]
-                    # Optimization: Cache QImages?
-                    page_img = QImage.fromData(img_data)
                     
-                    page_pix = QPixmap.fromImage(page_img)
+                    if isinstance(img_data, QPixmap):
+                        page_pix = img_data
+                    elif isinstance(img_data, QImage):
+                        page_pix = QPixmap.fromImage(img_data)
+                    else:
+                        # Assume bytes
+                        page_img = QImage.fromData(img_data)
+                        page_pix = QPixmap.fromImage(page_img)
+                        
                     cropped = page_pix.copy(rect)
                     
                     pixmaps.append(cropped)
