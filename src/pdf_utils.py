@@ -153,7 +153,10 @@ def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None, page
             key = f"E{ex_count}"
             c.bookmarkPage(key)
             if display_title:
-                 c.addOutlineEntry(f"{ex_count}: {display_title}", key, level=1, closed=True)
+                 # If no titles yet, this is a top-level exercise (level 0)
+                 # If titles exist, indent it (level 1)
+                 lvl = 1 if title_count > 0 else 0
+                 c.addOutlineEntry(f"{ex_count}: {display_title}", key, level=lvl, closed=True)
 
             # Draw Ordinal Number "<num> /"
             bottom_margin = 50 * scale_factor

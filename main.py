@@ -5,7 +5,7 @@ from src.gui import MainWindow
 
 def main():
     parser = argparse.ArgumentParser(description="ExCut - Exercise Cutter Tool")
-    parser.add_argument("input_files", nargs='+', help="Input PDF or Image files")
+    parser.add_argument("input_files", nargs='*', help="Input PDF or Image files")
     parser.add_argument("--output", default="output.pdf", help="Output PDF filename (default: output.pdf)")
     parser.add_argument("--bg-image", help="Path to background image for output PDF pages (takes precedence over pattern)", default=None)
     parser.add_argument("--bg-pattern", help="Background pattern name (available: 'squared')", default=None)

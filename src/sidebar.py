@@ -1,9 +1,10 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel, 
-    QPushButton, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QDialog, QScrollArea
+    QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QLabel, 
+    QPushButton, QHBoxLayout, QInputDialog, QMenu, QDialog, QScrollArea,
+    QAbstractItemView, QFrame, QApplication, QCheckBox, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QPixmap, QIcon, QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint
+from PyQt6.QtGui import QPixmap, QIcon, QAction, QDrag
 
 class ImageViewerDialog(QDialog):
     def __init__(self, pixmap, parent=None):
@@ -21,24 +22,84 @@ class ImageViewerDialog(QDialog):
         
         layout.addWidget(scroll)
 
+class GroupEditDialog(QDialog):
+    def __init__(self, current_name, show_title, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Group")
+        self.layout = QVBoxLayout(self)
+        
+        self.name_label = QLabel("Group Name:")
+        self.layout.addWidget(self.name_label)
+        
+        self.name_input = QInputDialog() # We just use a line edit
+        from PyQt6.QtWidgets import QLineEdit
+        self.name_edit = QLineEdit(current_name)
+        self.layout.addWidget(self.name_edit)
+        
+        self.show_title_chk = QCheckBox("Render as Title in PDF")
+        self.show_title_chk.setChecked(show_title)
+        self.layout.addWidget(self.show_title_chk)
+        
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.layout.addWidget(self.buttons)
+
+    def get_data(self):
+        return self.name_edit.text(), self.show_title_chk.isChecked()
+
+class DragHandle(QLabel):
+    def __init__(self, tree, item, parent=None):
+        super().__init__("☰", parent)
+        self.tree = tree
+        self.item = item
+        self.setStyleSheet("color: #888; font-size: 16px; font-weight: bold; cursor: move; margin-right: 5px;")
+        self.drag_start_pos = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not self.drag_start_pos:
+            return
+            
+        if (event.pos() - self.drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+            
+        drag = QDrag(self.tree)
+        mime_data = self.tree.mimeData([self.item])
+        drag.setMimeData(mime_data)
+        
+        widget = self.parent()
+        if widget:
+            pixmap = widget.grab()
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(event.pos())
+            
+        drag.exec(Qt.DropAction.MoveAction)
+
 class SidebarItemWidget(QWidget):
     delete_clicked = pyqtSignal()
     edit_clicked = pyqtSignal()
     copy_clicked = pyqtSignal()
 
-    def __init__(self, text, icon=None, is_title=False):
+    def __init__(self, text, tree, item, icon=None, is_title=False, is_group=False):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         
         # Drag Handle
-        self.drag_label = QLabel("☰")
-        self.drag_label.setStyleSheet("color: gray; font-size: 16px; cursor: move;")
+        self.drag_label = DragHandle(tree, item, self)
         layout.addWidget(self.drag_label)
         
-        # Thumbnail / Icon
+        # Icon / Thumbnail
         self.icon_label = QLabel()
-        if icon:
+        if is_group:
+             self.icon_label.setText("📁")
+             self.icon_label.setStyleSheet("font-size: 16px;")
+        elif icon:
             scaled = icon.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio)
             self.icon_label.setPixmap(scaled)
         elif is_title:
@@ -48,212 +109,414 @@ class SidebarItemWidget(QWidget):
         
         # Title/Name
         self.name_label = QLabel(text)
-        if is_title:
-            self.name_label.setStyleSheet("font-weight: bold; font-size: 14px;") # Bigger title
+        if is_title or is_group:
+            self.name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+            if is_group:
+                self.name_label.setStyleSheet("font-weight: bold; font-size: 14px; text-decoration: underline;")
         layout.addWidget(self.name_label, 1) # stretch
         
-        # Copy Button
+        # Controls
         self.copy_btn = QPushButton()
-        self.copy_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon)) # Standard File Icon
+        self.copy_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon)) 
         self.copy_btn.setToolTip("Copy")
-        self.copy_btn.setFixedWidth(30)
+        self.copy_btn.setFixedWidth(24)
         self.copy_btn.clicked.connect(self.copy_clicked.emit)
         layout.addWidget(self.copy_btn)
 
-        # Edit Button (Pen)
         self.edit_btn = QPushButton("✎")
-        self.edit_btn.setFixedWidth(30)
+        self.edit_btn.setFixedWidth(24)
         self.edit_btn.clicked.connect(self.edit_clicked.emit)
         layout.addWidget(self.edit_btn)
         
-        # Delete Button (Trash)
         self.del_btn = QPushButton()
         self.del_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_TrashIcon))
-        self.del_btn.setFixedWidth(30)
+        self.del_btn.setFixedWidth(24)
         self.del_btn.setStyleSheet("color: red;") 
         self.del_btn.clicked.connect(self.delete_clicked.emit)
         layout.addWidget(self.del_btn)
 
     def set_text(self, text):
         self.name_label.setText(text)
+        
+    def set_icon(self, pixmap):
+        scaled = pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio)
+        self.icon_label.setPixmap(scaled)
+
+class SidebarTree(QTreeWidget):
+    widgets_refreshed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setHeaderHidden(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setIndentation(20)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def dragMoveEvent(self, event):
+        target = self.itemAt(event.position().toPoint())
+        is_group = False
+        if target:
+            data = target.data(0, Qt.ItemDataRole.UserRole)
+            is_group = (data and data.get("type") == "group")
+            
+        pos = self.dropIndicatorPosition()
+        
+        # Strict Rule: Only Groups can accept "OnItem" drops (nesting)
+        # We REJECT (ignore) the event if user strictly tries to drop ON a non-group.
+        # This hints the view to look for other options (like Above/Below).
+        # However, if this makes "between" dropping impossible, we might need to rely on default behavior.
+        # Default behavior of QTreeWidget usually allows dropping ON anything.
+        if pos == QAbstractItemView.DropIndicatorPosition.OnItem and not is_group:
+            event.ignore() 
+            return
+
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        # We must call super to handle the data move
+        super().dropEvent(event)
+        self.widgets_refreshed.emit()
+
 
 class Sidebar(QWidget):
     finish_clicked = pyqtSignal()
-    request_recrop = pyqtSignal(object) # param: item (to get data)
+    request_recrop = pyqtSignal(object) 
+    request_discard = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
         
-        # Guide Label
-        # Guide Label
+        self.sticky_mode = False
+        
+        # Guide
         self.guide_label = QLabel(
             "<b>Controls:</b><br>"
-            "Page Switch: Arrows or H/L<br>"
-            "Zoom: Mouse Wheel<br>"
-            "Select: Drag Mouse<br>"
+            "Page: Arrows, H/L<br>"
+            "Nav: J/K/Arrows<br>"
             "Cut: Enter | Append: Shift+Enter<br>"
-            "Sidebar: Drag to Reorder<br>"
-            "Double Click: Inspect Image"
+            "Edit Group: Dbl Click/Pencil<br>"
+            "Sticky: Dbl Click Preview"
         )
-        # Default style, will be updated by set_theme
         self.guide_label.setTextFormat(Qt.TextFormat.RichText)
         self.layout.addWidget(self.guide_label)
 
-        # List Widget
-        self.list_widget = QListWidget()
-        self.list_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-        self.list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.list_widget.setSpacing(2)
-        self.list_widget.itemDoubleClicked.connect(self.on_item_double_click)
-        self.layout.addWidget(self.list_widget)
+        # Tree
+        self.tree = SidebarTree()
+        self.tree.itemDoubleClicked.connect(self.on_item_double_click)
+        self.tree.widgets_refreshed.connect(self.restore_widgets)
+        self.layout.addWidget(self.tree)
         
-        # Pending Label
+        self.pending_container = QWidget()
+        self.pending_layout = QVBoxLayout(self.pending_container)
+        self.pending_layout.setContentsMargins(0, 5, 0, 5)
+        
         self.pending_label = QLabel()
         self.pending_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pending_label.hide()
-        self.layout.addWidget(self.pending_label)
+        self.pending_label.setToolTip("Double-click to toggle Sticky Mode")
+        self.pending_label.mouseDoubleClickEvent = self.toggle_sticky_mode
+        self.pending_layout.addWidget(self.pending_label)
+        
+        self.discard_btn = QPushButton("Discard Pending")
+        self.discard_btn.setStyleSheet("color: red; font-size: 10px; border: 1px solid red; background: transparent;")
+        self.discard_btn.clicked.connect(self.request_discard.emit)
+        self.discard_btn.hide()
+        self.pending_layout.addWidget(self.discard_btn)
+        
+        self.pending_container.hide()
+        self.layout.addWidget(self.pending_container)
         
         # Buttons
         btn_layout = QHBoxLayout()
-        self.add_title_btn = QPushButton("Add Title Page")
+        self.add_group_btn = QPushButton("Add Group")
+        self.add_group_btn.clicked.connect(self.add_group)
+        btn_layout.addWidget(self.add_group_btn)
+        
+        self.add_title_btn = QPushButton("Add Title")
         self.add_title_btn.clicked.connect(self.add_title_page)
         btn_layout.addWidget(self.add_title_btn)
         
-        self.finish_btn = QPushButton("Finish")
-        self.finish_btn.clicked.connect(self.finish_clicked.emit)
-        btn_layout.addWidget(self.finish_btn)
-        
         self.layout.addLayout(btn_layout)
+        
+        self.finish_btn = QPushButton("Finish && Save PDF")
+        self.finish_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60; 
+                color: white; 
+                font-weight: bold; 
+                font-size: 14px; 
+                padding: 10px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #2ecc71;
+            }
+        """)
+        self.finish_btn.clicked.connect(self.finish_clicked.emit)
+        self.layout.addWidget(self.finish_btn)
 
-    def get_insert_row(self):
-        # If selection, return row + 1, else count
-        rows = [self.list_widget.row(x) for x in self.list_widget.selectedItems()]
-        if rows:
-            return rows[0] + 1
-        return self.list_widget.count()
+    def restore_widgets(self):
+        root = self.tree.invisibleRootItem()
+        self._recursive_restore(root)
+        
+    def _recursive_restore(self, parent_item):
+        for i in range(parent_item.childCount()):
+            item = parent_item.child(i)
+            # Check if widget exists
+            if not self.tree.itemWidget(item, 0):
+                # Restore
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                if data:
+                    is_group = (data["type"] == "group")
+                    is_title = (data["type"] == "title")
+                    icon = data.get("content") if data["type"] == "image" else None
+                    self._setup_item_widget(item, data["title"], icon, is_group, is_title)
+            
+            # Recurse
+            self._recursive_restore(item)
+
+    def toggle_sticky_mode(self, event):
+        self.sticky_mode = not self.sticky_mode
+        border = "3px solid #e74c3c" if self.sticky_mode else "2px dashed #f39c12"
+        self.pending_label.setStyleSheet(f"border: {border}; padding: 5px; background-color: #fcf3cf;")
+
+    def get_insert_location(self):
+        selected = self.tree.selectedItems()
+        if not selected:
+            root = self.tree.invisibleRootItem()
+            return root, root.childCount()
+        
+        item = selected[0]
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        
+        if data and data.get("type") == "group":
+            return item, item.childCount()
+        else:
+            parent = item.parent() or self.tree.invisibleRootItem()
+            idx = parent.indexOfChild(item)
+            return parent, idx + 1
+
+    def add_group(self):
+        items_to_move = self.tree.selectedItems()
+        
+        dlg = GroupEditDialog("", show_title=False, parent=self)
+        if dlg.exec():
+            text, show_title = dlg.get_data()
+            
+            group_item = QTreeWidgetItem()
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "title": text, "show_title": show_title})
+            
+            parent, idx = self.get_insert_location()
+            if items_to_move:
+                first = items_to_move[0]
+                parent = first.parent() or self.tree.invisibleRootItem()
+                idx = parent.indexOfChild(first)
+            
+            parent.insertChild(idx, group_item)
+            group_item.setExpanded(True)
+            self._setup_item_widget(group_item, text, is_group=True)
+            
+            if items_to_move:
+                for item in items_to_move:
+                    old_parent = item.parent() or self.tree.invisibleRootItem()
+                    ix = old_parent.indexOfChild(item)
+                    if ix >= 0:
+                        taken = old_parent.takeChild(ix)
+                        group_item.addChild(taken)
+                        
+                        data = taken.data(0, Qt.ItemDataRole.UserRole)
+                        icon = data.get("content") if data["type"] == "image" else None
+                        is_grp = (data["type"] == "group")
+                        is_ttl = (data["type"] == "title")
+                        self._setup_item_widget(taken, data["title"], icon, is_grp, is_ttl)
+            
+            self.tree.setCurrentItem(group_item)
 
     def add_exercise(self, pixmap, name=None, metadata=None):
         if name is None:
             name = ""
-            
-        item = QListWidgetItem()
-        # metadata: {'page_idx': int, 'rect': QRect} for basic items
+        
+        item = QTreeWidgetItem()
         data = {"type": "image", "content": pixmap, "title": name}
         if metadata:
             data.update(metadata)
-            
-        item.setData(Qt.ItemDataRole.UserRole, data)
-        item.setSizeHint(QSize(0, 60))
+        item.setData(0, Qt.ItemDataRole.UserRole, data)
         
-        row = self.get_insert_row()
-        self.list_widget.insertItem(row, item)
+        parent, idx = self.get_insert_location()
+        parent.insertChild(idx, item)
         
-        widget = SidebarItemWidget(name, icon=pixmap)
-        widget.delete_clicked.connect(lambda: self.delete_item(item))
-        widget.edit_clicked.connect(lambda: self.edit_item(item, widget))
-        widget.copy_clicked.connect(lambda: self.copy_item(item))
+        if parent != self.tree.invisibleRootItem():
+            parent.setExpanded(True)
+
+        self._setup_item_widget(item, name, icon=pixmap)
         
-        self.list_widget.setItemWidget(item, widget)
-        # Select new item for continuous insertion flow
-        self.list_widget.setCurrentItem(item)
-        self.list_widget.scrollToItem(item)
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item)
 
     def add_title_page(self):
         text, ok = QInputDialog.getText(self, "Add Title Page", "Enter title:")
         if ok and text:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, {"type": "title", "content": None, "title": text})
-            item.setSizeHint(QSize(0, 60))
+            item = QTreeWidgetItem()
+            item.setData(0, Qt.ItemDataRole.UserRole, {"type": "title", "content": None, "title": text})
             
-            row = self.get_insert_row()
-            self.list_widget.insertItem(row, item)
+            parent, idx = self.get_insert_location()
+            parent.insertChild(idx, item)
             
-            widget = SidebarItemWidget(text, is_title=True)
-            widget.delete_clicked.connect(lambda: self.delete_item(item))
-            widget.edit_clicked.connect(lambda: self.edit_item(item, widget))
-            widget.copy_clicked.connect(lambda: self.copy_item(item))
-            
-            self.list_widget.setItemWidget(item, widget)
-            self.list_widget.setCurrentItem(item)
-            self.list_widget.scrollToItem(item)
+            self._setup_item_widget(item, text, is_title=True)
+            self.tree.setCurrentItem(item)
+
+    def _setup_item_widget(self, item, text, icon=None, is_group=False, is_title=False):
+        widget = SidebarItemWidget(text, self.tree, item, icon, is_title=is_title, is_group=is_group)
+        widget.delete_clicked.connect(lambda: self.delete_item(item))
+        widget.edit_clicked.connect(lambda: self.edit_item(item, widget))
+        widget.copy_clicked.connect(lambda: self.copy_item(item))
+        self.tree.setItemWidget(item, 0, widget)
 
     def delete_item(self, item):
-        row = self.list_widget.row(item)
-        self.list_widget.takeItem(row)
+        parent = item.parent() or self.tree.invisibleRootItem()
+        parent.removeChild(item)
 
     def edit_item(self, item, widget):
-        data = item.data(Qt.ItemDataRole.UserRole)
-        current_title = data["title"]
-        text, ok = QInputDialog.getText(self, "Rename", "New name:", text=current_title)
-        if ok and text:
-            data["title"] = text
-            item.setData(Qt.ItemDataRole.UserRole, data)
-            widget.set_text(text)
-            
-    def copy_item(self, item):
-        data = item.data(Qt.ItemDataRole.UserRole)
-        new_data = data.copy()
-        
-        # Create new item
-        new_item = QListWidgetItem()
-        new_item.setData(Qt.ItemDataRole.UserRole, new_data)
-        new_item.setSizeHint(QSize(0, 60))
-        
-        row = self.list_widget.row(item) + 1
-        self.list_widget.insertItem(row, new_item)
-        
-        # Widget logic
-        icon = new_data["content"] if new_data["type"] == "image" else None
-        is_title = (new_data["type"] == "title")
-        
-        widget = SidebarItemWidget(new_data["title"], icon=icon, is_title=is_title)
-        widget.delete_clicked.connect(lambda: self.delete_item(new_item))
-        widget.edit_clicked.connect(lambda: self.edit_item(new_item, widget))
-        widget.copy_clicked.connect(lambda: self.copy_item(new_item))
-        
-        self.list_widget.setItemWidget(new_item, widget)
-        self.list_widget.setCurrentItem(new_item)
-
-    def on_item_double_click(self, item):
-        data = item.data(Qt.ItemDataRole.UserRole)
-        if data["type"] == "image":
-            # Emit signal for main window to handle re-cropping
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        # Check type
+        if data.get("type") == "image":
             self.request_recrop.emit(item)
+        elif data.get("type") == "group":
+            # Group Edit Dialog
+            dlg = GroupEditDialog(data["title"], data.get("show_title", False), self)
+            if dlg.exec():
+                text, show_title = dlg.get_data()
+                data["title"] = text
+                data["show_title"] = show_title
+                item.setData(0, Qt.ItemDataRole.UserRole, data)
+                widget.set_text(text)
+        else:
+            # Title Rename
+            current_title = data["title"]
+            text, ok = QInputDialog.getText(self, "Rename", "New name:", text=current_title)
+            if ok and text:
+                data["title"] = text
+                item.setData(0, Qt.ItemDataRole.UserRole, data)
+                widget.set_text(text)
+
+    def copy_item(self, item):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        import copy
+        new_data = data.copy()
+        if "parts" in new_data:
+            new_data["parts"] = copy.deepcopy(new_data["parts"])
+            
+        new_item = QTreeWidgetItem()
+        new_item.setData(0, Qt.ItemDataRole.UserRole, new_data)
+        
+        parent = item.parent() or self.tree.invisibleRootItem()
+        idx = parent.indexOfChild(item)
+        parent.insertChild(idx + 1, new_item)
+        
+        is_group = (new_data["type"] == "group")
+        is_title = (new_data["type"] == "title")
+        icon = new_data.get("content")
+        
+        self._setup_item_widget(new_item, new_data["title"], icon, is_group, is_title)
+        self.tree.setCurrentItem(new_item)
+
+    def on_item_double_click(self, item, column):
+        # Determine type
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data.get("type") == "image":
+            # Exercise -> Recrop
+            self.request_recrop.emit(item)
+        else:
+            # Title/Group -> Rename/Edit
+            widget = self.tree.itemWidget(item, 0)
+            self.edit_item(item, widget)
+
+    def rename_selected(self):
+        items = self.tree.selectedItems()
+        if not items: return
+        
+        if len(items) == 1:
+            item = items[0]
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            # Just use regular edit logic (Recrop for image? NO, F2 should RENAME if possible)
+            # Reverting: F2 and Pencil on Image = Rename. DblClick = Edit.
+            # User earlier said "edit buttons triggers recrop".
+            # Let's keep strict "edit_item" for pencil/double click.
+            # But F2 is "Rename".
+            
+            widget = self.tree.itemWidget(item, 0)
+            
+            current_title = data["title"]
+            text, ok = QInputDialog.getText(self, "Rename", "New name:", text=current_title)
+            if ok and text:
+                data["title"] = text
+                item.setData(0, Qt.ItemDataRole.UserRole, data)
+                widget.set_text(text)
+        else:
+            text, ok = QInputDialog.getText(self, "Mass Rename", "New Title Template (use %d for number):")
+            if ok and text:
+                for i, item in enumerate(items):
+                    new_title = text.replace("%d", str(i+1)) if "%d" in text else f"{text} {i+1}"
+                    data = item.data(0, Qt.ItemDataRole.UserRole)
+                    data["title"] = new_title
+                    item.setData(0, Qt.ItemDataRole.UserRole, data)
+                    widget = self.tree.itemWidget(item, 0)
+                    if widget: widget.set_text(new_title)
 
     def update_pending_exercise(self, pixmap):
-        if not self.pending_label.isVisible():
-            self.pending_label.show()
-            self.pending_label.setStyleSheet("border: 2px dashed #f39c12; padding: 5px; background-color: #fcf3cf;")
+        if not self.pending_container.isVisible():
+            self.pending_container.show()
+            self.discard_btn.show()
+            border = "3px solid #e74c3c" if self.sticky_mode else "2px dashed #f39c12"
+            self.pending_label.setStyleSheet(f"border: {border}; padding: 5px; background-color: #fcf3cf;")
             
         w = self.width() - 40
         scaled = pixmap.scaled(w, w, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.pending_label.setPixmap(scaled)
 
     def remove_pending(self):
-        self.pending_label.clear()
-        self.pending_label.hide()
+        if not self.sticky_mode:
+            self.pending_label.clear()
+            self.pending_container.hide()
+            self.discard_btn.hide()
 
     def get_items(self):
         items = []
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            data = item.data(Qt.ItemDataRole.UserRole)
-            items.append(data)
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            self._collect_items(root.child(i), items)
         return items
+
+    def _collect_items(self, item, items_list):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        
+        if data["type"] == "group":
+            # Check flag
+            if data.get("show_title", False):
+                items_list.append({"type": "title", "title": data["title"], "content": None})
+            
+            for i in range(item.childCount()):
+                self._collect_items(item.child(i), items_list)
+        else:
+            items_list.append(data)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Delete:
-            items = self.list_widget.selectedItems()
-            if items:
-                self.delete_item(items[0])
+            items = self.tree.selectedItems()
+            for item in items:
+                self.delete_item(item)
+        elif event.key() == Qt.Key.Key_F2:
+            self.rename_selected()
+        elif event.key() == Qt.Key.Key_J:
+             self.tree.setCurrentItem(self.tree.itemBelow(self.tree.currentItem()))
+        elif event.key() == Qt.Key.Key_K:
+             self.tree.setCurrentItem(self.tree.itemAbove(self.tree.currentItem()))
         else:
             super().keyPressEvent(event)
-
+            
     def set_theme(self, theme):
         if theme == "dark":
-            # Dark mode: Dark background for guide, white text (handled by palette, but background needs opacity or color)
             self.guide_label.setStyleSheet("background: #444; color: white; padding: 5px; border-radius: 4px;")
         else:
-            # Light mode: Light background
             self.guide_label.setStyleSheet("background: #eee; color: black; padding: 5px; border-radius: 4px;")
