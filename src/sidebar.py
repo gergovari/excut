@@ -183,6 +183,7 @@ class Sidebar(QWidget):
     finish_clicked = pyqtSignal()
     request_recrop = pyqtSignal(object) 
     request_discard = pyqtSignal()
+    state_changed = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -197,7 +198,8 @@ class Sidebar(QWidget):
             "Nav: J/K/Arrows<br>"
             "Cut: Enter | Append: Shift+Enter<br>"
             "Edit Group: Dbl Click/Pencil<br>"
-            "Sticky: Dbl Click Preview"
+            "Sticky: Dbl Click Preview<br>"
+            "Undo/Redo: Ctrl+Z/Y"
         )
         self.guide_label.setTextFormat(Qt.TextFormat.RichText)
         self.layout.addWidget(self.guide_label)
@@ -206,6 +208,7 @@ class Sidebar(QWidget):
         self.tree = SidebarTree()
         self.tree.itemDoubleClicked.connect(self.on_item_double_click)
         self.tree.widgets_refreshed.connect(self.restore_widgets)
+        self.tree.widgets_refreshed.connect(self.state_changed.emit)
         self.layout.addWidget(self.tree)
         
         self.pending_container = QWidget()
@@ -332,6 +335,7 @@ class Sidebar(QWidget):
                         self._setup_item_widget(taken, data["title"], icon, is_grp, is_ttl)
             
             self.tree.setCurrentItem(group_item)
+            self.state_changed.emit()
 
     def add_exercise(self, pixmap, name=None, metadata=None):
         if name is None:
@@ -353,6 +357,7 @@ class Sidebar(QWidget):
         
         self.tree.setCurrentItem(item)
         self.tree.scrollToItem(item)
+        self.state_changed.emit()
 
     def add_title_page(self):
         text, ok = QInputDialog.getText(self, "Add Title Page", "Enter title:")
@@ -365,6 +370,7 @@ class Sidebar(QWidget):
             
             self._setup_item_widget(item, text, is_title=True)
             self.tree.setCurrentItem(item)
+            self.state_changed.emit()
 
     def _setup_item_widget(self, item, text, icon=None, is_group=False, is_title=False):
         widget = SidebarItemWidget(text, self.tree, item, icon, is_title=is_title, is_group=is_group)
@@ -376,6 +382,7 @@ class Sidebar(QWidget):
     def delete_item(self, item):
         parent = item.parent() or self.tree.invisibleRootItem()
         parent.removeChild(item)
+        self.state_changed.emit()
 
     def edit_item(self, item, widget):
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -391,6 +398,7 @@ class Sidebar(QWidget):
                 data["show_title"] = show_title
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
+                self.state_changed.emit()
         else:
             # Title Rename
             current_title = data["title"]
@@ -399,6 +407,8 @@ class Sidebar(QWidget):
                 data["title"] = text
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
+                self.state_changed.emit()
+                self.state_changed.emit()
 
     def copy_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -420,6 +430,7 @@ class Sidebar(QWidget):
         
         self._setup_item_widget(new_item, new_data["title"], icon, is_group, is_title)
         self.tree.setCurrentItem(new_item)
+        self.state_changed.emit()
 
     def on_item_double_click(self, item, column):
         # Determine type
@@ -436,14 +447,10 @@ class Sidebar(QWidget):
         items = self.tree.selectedItems()
         if not items: return
         
+        changed = False
         if len(items) == 1:
             item = items[0]
             data = item.data(0, Qt.ItemDataRole.UserRole)
-            # Just use regular edit logic (Recrop for image? NO, F2 should RENAME if possible)
-            # Reverting: F2 and Pencil on Image = Rename. DblClick = Edit.
-            # User earlier said "edit buttons triggers recrop".
-            # Let's keep strict "edit_item" for pencil/double click.
-            # But F2 is "Rename".
             
             widget = self.tree.itemWidget(item, 0)
             
@@ -453,6 +460,7 @@ class Sidebar(QWidget):
                 data["title"] = text
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
+                changed = True
         else:
             text, ok = QInputDialog.getText(self, "Mass Rename", "New Title Template (use %d for number):")
             if ok and text:
@@ -463,6 +471,10 @@ class Sidebar(QWidget):
                     item.setData(0, Qt.ItemDataRole.UserRole, data)
                     widget = self.tree.itemWidget(item, 0)
                     if widget: widget.set_text(new_title)
+                changed = True
+        
+        if changed:
+            self.state_changed.emit()
 
     def update_pending_exercise(self, pixmap):
         if not self.pending_container.isVisible():

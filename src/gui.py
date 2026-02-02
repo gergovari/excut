@@ -246,6 +246,11 @@ class MainWindow(QMainWindow):
         self.current_idx = 0
         self.pending_parts = []
         
+        # Undo/Redo State
+        self.undo_stack = []
+        self.redo_stack = []
+        self.current_state_snapshot = []
+        
         QTimer.singleShot(0, self.load_data)
 
     def _init_ui(self):
@@ -284,6 +289,18 @@ class MainWindow(QMainWindow):
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+        
+        # Undo/Redo Actions
+        edit_menu = menubar.addMenu("Edit")
+        undo_action = QAction("Undo", self)
+        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        undo_action.triggered.connect(self.undo)
+        edit_menu.addAction(undo_action)
+        
+        redo_action = QAction("Redo", self)
+        redo_action.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
+        redo_action.triggered.connect(self.redo)
+        edit_menu.addAction(redo_action)
         
         proj_menu = menubar.addMenu("Project")
         settings_action = QAction("Settings...", self)
@@ -325,6 +342,7 @@ class MainWindow(QMainWindow):
         self.sidebar.finish_clicked.connect(self.finish_process)
         self.sidebar.request_recrop.connect(self.handle_recrop)
         self.sidebar.request_discard.connect(self.discard_pending)
+        self.sidebar.state_changed.connect(self.on_sidebar_change)
         
         self.splitter.setSizes([900, 300])
         
@@ -431,7 +449,8 @@ class MainWindow(QMainWindow):
                 "bg_pattern": self.bg_pattern,
                 "current_idx": self.current_idx,
                 "pending_parts": pending_state,
-                # "zoom": ... (canvas zoom state is complex, skipping for now)
+                "undo_stack": self._serialize_stack(self.undo_stack),
+                "redo_stack": self._serialize_stack(self.redo_stack)
             }
             
             save_project(path, self.input_paths, items_state, metadata=meta)
@@ -439,6 +458,27 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Success", f"Project saved to {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
+
+    def _serialize_stack(self, stack):
+        # Stack is list of snapshots. Each snapshot is list of item dicts.
+        # We need to ensure QRects are lists.
+        serialized = []
+        for snapshot in stack:
+            ser_snapshot = []
+            for item in snapshot:
+                s_item = item.copy()
+                if "content" in s_item: del s_item["content"]
+                if "children" in s_item:
+                    # We need deep recursion for children serialization if they have QRects
+                    # But _get_sidebar_state already handles structural serialization?
+                    # The stack stores the result of _get_sidebar_state.
+                    # _get_sidebar_state handles QRect conversion!
+                    # So snapshot items are ALREADY CLEAN dicts?
+                    # Let's double check _get_sidebar_state implementation.
+                    pass
+                ser_snapshot.append(s_item)
+            serialized.append(ser_snapshot)
+        return serialized
 
     def _get_sidebar_state(self):
         state = []
@@ -451,7 +491,7 @@ class MainWindow(QMainWindow):
         data = item.data(0, Qt.ItemDataRole.UserRole).copy()
         if "content" in data: del data["content"]
         
-        # FIX: Recursively convert QRects in parts
+        # Recursively convert QRects in parts
         if "parts" in data:
             new_parts = []
             for p in data["parts"]:
@@ -478,6 +518,111 @@ class MainWindow(QMainWindow):
     def _load_project_file(self, path):
          try:
             self.pages = []
+            self.input_paths = []
+            self.sidebar.tree.clear()
+            self.sidebar.remove_pending()
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # We need to Keep the temp dir alive? 
+                # No, we load images into memory.
+                pass
+                
+            # Actually load_project helper does extraction. 
+            # We need a persistent location for assets if we want to reload them later?
+            # Current implementation loads all into memory.
+            
+            # Create a dedicated extract dir that persists or clean up?
+            # ExCut loads everything to memory (self.pages).
+            
+            extract_dir = tempfile.mkdtemp()
+            # Clean up old extract_dir if exists?
+            
+            input_paths, items, metadata = load_project(path, extract_dir)
+            self.input_paths = input_paths
+            
+            if "theme" in metadata:
+                self.theme = metadata["theme"]
+                self.apply_theme(self.theme)
+            
+            if "page_size" in metadata:
+                # Handle tuple vs list
+                ps = metadata["page_size"]
+                if isinstance(ps, list): ps = tuple(ps)
+                self.page_size = ps
+                
+            if "output_file" in metadata:
+                self.output_file = metadata["output_file"]
+                
+            if "bg_image" in metadata:
+                 self.bg_image = metadata["bg_image"]
+            if "bg_pattern" in metadata:
+                 self.bg_pattern = metadata["bg_pattern"]
+                 
+            self.load_images_from_paths(self.input_paths)
+            self._restore_sidebar_items(items)
+            
+            if "current_idx" in metadata:
+                self.current_idx = metadata["current_idx"]
+                
+            self.show_current_page()
+            
+            # Restore Pending
+            if "pending_parts" in metadata:
+                for pmeta in metadata["pending_parts"]:
+                    if "rect" in pmeta and isinstance(pmeta["rect"], list):
+                        x, y, w, h = pmeta["rect"]
+                        pmeta["rect"] = QRect(x, y, w, h)
+                    parts = [pmeta]
+                    pix = self._reconstruct_pixmap(parts)
+                    if pix:
+                        self.pending_parts.append((pix, pmeta))
+                if self.pending_parts:
+                    parts_visuals = [p[0] for p in self.pending_parts]
+                    preview = self.combine_parts(parts_visuals)
+                    self.sidebar.update_pending_exercise(preview)
+            
+            # Restore Undo/Redo Stacks
+            # They are lists of snapshots.
+            # Snapshots are lists of items (dicts).
+            # The items have 'rect' lists that need to be QRects?
+            # actually _restore_sidebar_items handles dict->item creation BUT relies on gui helper for QRect?
+            # No, _restore_sidebar_items iterates a list.
+            # We need to recursively fix QRects in the stacks if we want them to be "ready to restore".
+            
+            def fix_snapshot_rects(snapshot):
+                fixed = []
+                for item in snapshot:
+                    # Shallow copy item
+                    c_item = item.copy()
+                    if "parts" in c_item:
+                         new_parts = []
+                         for p in c_item["parts"]:
+                             np = p.copy()
+                             if "rect" in np and isinstance(np["rect"], list):
+                                 x,y,w,h = np["rect"]
+                                 np["rect"] = QRect(x,y,w,h)
+                             new_parts.append(np)
+                         c_item["parts"] = new_parts
+                    
+                    if "children" in c_item:
+                        c_item["children"] = fix_snapshot_rects(c_item["children"])
+                    fixed.append(c_item)
+                return fixed
+
+            self.undo_stack = []
+            if "undo_stack" in metadata:
+                for s in metadata["undo_stack"]:
+                    self.undo_stack.append(fix_snapshot_rects(s))
+                    
+            self.redo_stack = []
+            if "redo_stack" in metadata:
+                for s in metadata["redo_stack"]:
+                    self.redo_stack.append(fix_snapshot_rects(s))
+
+            self.current_state_snapshot = self._get_sidebar_state()
+            
+         except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
             self.current_idx = 0
             self.pending_parts = []
             self.sidebar.tree.clear()
@@ -510,6 +655,8 @@ class MainWindow(QMainWindow):
                 
             self.show_current_page()
             
+            self.show_current_page()
+            
             # Restore Pending
             if "pending_parts" in metadata:
                 for pmeta in metadata["pending_parts"]:
@@ -530,8 +677,52 @@ class MainWindow(QMainWindow):
                     preview = self.combine_parts(parts_visuals)
                     self.sidebar.update_pending_exercise(preview)
             
+            # Init Snapshot
+            self.current_state_snapshot = self._get_sidebar_state()
+            self.undo_stack = []
+            self.redo_stack = []
+            
          except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
+
+    def on_sidebar_change(self):
+        # Capture new state
+        new_state = self._get_sidebar_state()
+        
+        # Push OLD state to undo
+        self.undo_stack.append(self.current_state_snapshot)
+        self.current_state_snapshot = new_state
+        self.redo_stack.clear() # Invalidated
+        
+    def undo(self):
+        if not self.undo_stack:
+            return
+            
+        state_to_restore = self.undo_stack.pop()
+        self.redo_stack.append(self.current_state_snapshot)
+        
+        self.sidebar.tree.blockSignals(True) # Prevent feedback loop
+        self.sidebar.tree.clear()
+        self._restore_sidebar_items(state_to_restore)
+        self.sidebar.tree.blockSignals(False)
+        self.sidebar.restore_widgets()
+        
+        self.current_state_snapshot = state_to_restore
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+
+        state_to_restore = self.redo_stack.pop()
+        self.undo_stack.append(self.current_state_snapshot)
+        
+        self.sidebar.tree.blockSignals(True)
+        self.sidebar.tree.clear()
+        self._restore_sidebar_items(state_to_restore)
+        self.sidebar.tree.blockSignals(False)
+        self.sidebar.restore_widgets()
+        
+        self.current_state_snapshot = state_to_restore
 
     def _restore_sidebar_items(self, items, parent_item=None):
         for data in items:
@@ -567,11 +758,20 @@ class MainWindow(QMainWindow):
                     self._restore_sidebar_items(data["children"], item)
                     
             elif data["type"] == "image":
-                pix = self._reconstruct_pixmap(data.get("parts", []))
+                # Ensure rects in parts are QRects (snapshots store them as lists)
+                parts = data.get("parts", [])
+                clean_parts = []
+                for p in parts:
+                    cp = p.copy()
+                    if "rect" in cp and isinstance(cp["rect"], list) and len(cp["rect"]) == 4:
+                        cp["rect"] = QRect(*cp["rect"])
+                    clean_parts.append(cp)
+                
+                pix = self._reconstruct_pixmap(clean_parts)
                 if pix:
                     from PyQt6.QtWidgets import QTreeWidgetItem
                     item = QTreeWidgetItem()
-                    item_data = {"type": "image", "content": pix, "title": data.get("title", ""), "parts": data.get("parts", [])}
+                    item_data = {"type": "image", "content": pix, "title": data.get("title", ""), "parts": clean_parts}
                     item.setData(0, Qt.ItemDataRole.UserRole, item_data)
                     
                     if parent_item:
@@ -626,8 +826,14 @@ class MainWindow(QMainWindow):
                 self.pages.append((img_data, fname, pnum))
                 QApplication.processEvents()
             self.show_current_page()
+            
+            # Reset Undo History after initial load
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self.current_state_snapshot = self._get_sidebar_state()
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load files: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load data: {e}")
         progress.close()
 
     def apply_theme(self, theme):
@@ -777,6 +983,8 @@ class MainWindow(QMainWindow):
                     widget = self.sidebar.tree.itemWidget(item, 0)
                     if widget:
                         widget.set_icon(combined_pix)
+                    
+                    self.sidebar.state_changed.emit()
         else:
              QMessageBox.information(self, "Info", "Cannot edit this item (missing metadata).")
 
