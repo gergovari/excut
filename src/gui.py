@@ -402,6 +402,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(preview_action)
         
         exit_action = QAction("Exit", self)
+        exit_action.setShortcut(QKeySequence("Ctrl+Q"))
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         

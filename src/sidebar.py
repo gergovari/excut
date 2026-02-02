@@ -352,7 +352,8 @@ class Sidebar(QWidget):
             "Cut: Enter | Append: Shift+Enter<br>"
             "Edit Group: Dbl Click/Pencil<br>"
             "Sticky: Dbl Click Preview<br>"
-            "Undo/Redo: Ctrl+Z/Y"
+            "Undo/Redo: Ctrl+Z/Y<br>"
+            "Quit: Ctrl+Q"
         )
         self.guide_label.setTextFormat(Qt.TextFormat.RichText)
         self.layout.addWidget(self.guide_label)
