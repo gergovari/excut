@@ -1190,11 +1190,11 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
             
             # Apply any restored rotations if already set (e.g. from load_project_file)
-            # Wait, load_project_file calls this. 
-            # If load_project_file set rotations, we should apply them now.
+            restored_rotations = self.page_rotations[:]
+            self.page_rotations = [0] * len(self.pages) 
             for i in range(len(self.pages)):
-                if i < len(self.page_rotations) and self.page_rotations[i] != 0:
-                    self._apply_rotation_to_page(i, self.page_rotations[i], save_undo=False)
+                if i < len(restored_rotations) and restored_rotations[i] != 0:
+                    self._apply_rotation_to_page(i, restored_rotations[i], save_undo=False, sync_items=False)
 
             self.show_current_page()
             
@@ -1249,7 +1249,7 @@ class MainWindow(QMainWindow):
         self._apply_rotation_to_page(self.current_idx, angle, save_undo=True)
         self.set_unsaved_changes(True)
 
-    def _apply_rotation_to_page(self, page_idx, angle, save_undo=True):
+    def _apply_rotation_to_page(self, page_idx, angle, save_undo=True, sync_items=True):
         if not (0 <= page_idx < len(self.pages)):
             return
 
@@ -1287,7 +1287,8 @@ class MainWindow(QMainWindow):
         self.pages[page_idx] = (new_img, fname, pnum)
         
         # 5. Synchronize Sidebar Items
-        self._update_items_on_rotation(page_idx, angle)
+        if sync_items:
+            self._update_items_on_rotation(page_idx, angle)
         
         self.set_unsaved_changes(True)
         self.show_current_page()
