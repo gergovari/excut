@@ -723,6 +723,17 @@ class Sidebar(QWidget):
         else:
             items_list.append(data)
 
+    def iter_all_items(self):
+        """Yields (QTreeWidgetItem, data_dict) for all items in the tree."""
+        root = self.tree.invisibleRootItem()
+        stack = [root.child(i) for i in range(root.childCount())]
+        while stack:
+            item = stack.pop()
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            yield item, data
+            for i in range(item.childCount()):
+                stack.append(item.child(i))
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_J:
             self.tree.navigate_next()

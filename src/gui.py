@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QFormLayout, QLineEdit, QComboBox, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF
-from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage, QPen, QBrush
+from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage, QPen, QBrush, QIcon
 from .canvas import ImageCanvas
 from .sidebar import Sidebar
 from .pdf_utils import load_input_files, generate_output_pdf
@@ -1184,7 +1184,9 @@ class MainWindow(QMainWindow):
             generator = load_input_files(paths)
             for img_data, fname, pnum in generator:
                 self.pages.append((img_data, fname, pnum))
-                self.page_rotations.append(0)
+                # Only add 0 if not already populated (e.g. from load_project_file)
+                if len(self.page_rotations) < len(self.pages):
+                    self.page_rotations.append(0)
                 QApplication.processEvents()
             
             # Apply any restored rotations if already set (e.g. from load_project_file)
@@ -1246,7 +1248,6 @@ class MainWindow(QMainWindow):
         angle = 90 if direction == 'right' else -90
         self._apply_rotation_to_page(self.current_idx, angle, save_undo=True)
         self.set_unsaved_changes(True)
-        self.show_current_page()
 
     def _apply_rotation_to_page(self, page_idx, angle, save_undo=True):
         if not (0 <= page_idx < len(self.pages)):
@@ -1284,8 +1285,77 @@ class MainWindow(QMainWindow):
         
         # 4. Update
         self.pages[page_idx] = (new_img, fname, pnum)
+        
+        # 5. Synchronize Sidebar Items
+        self._update_items_on_rotation(page_idx, angle)
+        
         self.set_unsaved_changes(True)
         self.show_current_page()
+
+    def _transform_rect(self, rect, page_w, page_h, angle):
+        """Transforms a QRect based on a 90, 180, or 270 degree rotation."""
+        if angle == 0: return rect
+        
+        # For 90 degree clockwise:
+        # new_x = page_h - (old_y + old_h)
+        # new_y = old_x
+        # new_w = old_h
+        # new_h = old_w
+        
+        # For -90 (270) degree:
+        # new_x = old_y
+        # new_y = page_w - (old_x + old_w)
+        # new_w = old_h
+        # new_h = old_w
+        
+        if angle == 90:
+            return QRect(page_h - (rect.y() + rect.height()), rect.x(), rect.height(), rect.width())
+        elif angle == -90 or angle == 270:
+            return QRect(rect.y(), page_w - (rect.x() + rect.width()), rect.height(), rect.width())
+        elif abs(angle) == 180:
+            return QRect(page_w - (rect.x() + rect.width()), page_h - (rect.y() + rect.height()), rect.width(), rect.height())
+        return rect
+
+    def _update_items_on_rotation(self, page_idx, angle):
+        """Updates all sidebar items that contain parts from the rotated page."""
+        # We need the page size BEFORE rotation to transform correctly
+        # This is tricky because we already rotated self.pages[page_idx].
+        # But we can get the new size and infer the old one.
+        new_img, _, _ = self.pages[page_idx]
+        new_w, new_h = new_img.width(), new_img.height()
+        
+        # If rotated 90/-90, the old dimensions are swapped
+        if abs(angle) % 180 == 90:
+            old_w, old_h = new_h, new_w
+        else:
+            old_w, old_h = new_w, new_h
+
+        # Iterate through all items in sidebar
+        for item, data in self.sidebar.iter_all_items():
+            if data.get("type") == "image" and "parts" in data:
+                updated = False
+                new_parts = []
+                for p in data["parts"]:
+                    if p.get("page_idx") == page_idx:
+                        # Transform Rect
+                        p["rect"] = self._transform_rect(p["rect"], old_w, old_h, angle)
+                        updated = True
+                    new_parts.append(p)
+                
+                if updated:
+                    # Re-reconstruct Pixmap
+                    data["parts"] = new_parts
+                    new_pix = self._reconstruct_pixmap(new_parts)
+                    data["content"] = new_pix
+                    
+                    # Update Tree Widget
+                    item.setData(0, Qt.ItemDataRole.UserRole, data)
+                    widget = self.sidebar.tree.itemWidget(item, 0)
+                    if widget:
+                        widget.set_icon(new_pix)
+                    
+                    # Ensure icon in tree is updated too
+                    item.setIcon(0, QIcon(new_pix))
             
 
 
