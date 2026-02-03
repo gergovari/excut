@@ -36,11 +36,19 @@ class ImageViewerDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         lbl = QLabel()
-        lbl.setPixmap(pixmap)
+        
+        # Scale to fit width while keeping aspect ratio
+        max_w = self.width() - 40
+        scaled = pixmap.scaled(max_w, pixmap.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        lbl.setPixmap(scaled)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         scroll.setWidget(lbl)
         
         layout.addWidget(scroll)
+        
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
 
 class GroupEditDialog(QDialog):
     def __init__(self, current_name, show_title, parent=None):

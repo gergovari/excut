@@ -145,14 +145,25 @@ class RecropDialog(QDialog):
         # Show
         dlg = QDialog(self)
         dlg.setWindowTitle("Exercise Preview")
+        dlg.resize(600, 800)
         layout = QVBoxLayout(dlg)
+        
         lbl = QLabel()
-        lbl.setPixmap(combined)
+        # Scale to fit width while keeping aspect ratio
+        max_w = dlg.width() - 40
+        scaled = combined.scaled(max_w, combined.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        lbl.setPixmap(scaled)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         scroll.setWidget(lbl)
         layout.addWidget(scroll)
-        dlg.resize(600, 800)
+        
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+        
         dlg.exec()
         
     def load_page(self, page_idx):
@@ -360,6 +371,7 @@ class MainWindow(QMainWindow):
         self._init_ui()
         
         self.pages = [] # List of (img_data, filename, page_num)
+        self.page_rotations = [] # List of cumulative rotation angles
         self.current_idx = 0
         self.pending_parts = []
         
@@ -571,6 +583,7 @@ class MainWindow(QMainWindow):
                 "current_idx": self.current_idx,
                 "sticky_mode": self.sidebar.sticky_mode,
                 "pending_parts": pending_state,
+                "page_rotations": self.page_rotations,
                 "undo_stack": self._serialize_stack(self.undo_stack),
                 "redo_stack": self._serialize_stack(self.redo_stack)
             }
@@ -744,6 +757,8 @@ class MainWindow(QMainWindow):
                  self.bg_image = metadata["bg_image"]
             if "bg_pattern" in metadata:
                  self.bg_pattern = metadata["bg_pattern"]
+            if "page_rotations" in metadata:
+                 self.page_rotations = metadata["page_rotations"]
                  
             self.load_images_from_paths(self.input_paths)
             self._restore_sidebar_items(items)
@@ -950,12 +965,19 @@ class MainWindow(QMainWindow):
         if isinstance(item, dict) and item.get('type') == 'rotate':
              page_idx = item['page_idx']
              old_data = item['data']
+             old_angle = item.get('prev_angle', 0)
              
              # Save current for Redo
              current_data = self.pages[page_idx]
-             self.redo_stack.append({'type': 'rotate', 'page_idx': page_idx, 'data': current_data})
+             self.redo_stack.append({
+                 'type': 'rotate', 
+                 'page_idx': page_idx, 
+                 'data': current_data,
+                 'prev_angle': self.page_rotations[page_idx]
+             })
              
              self.pages[page_idx] = old_data
+             self.page_rotations[page_idx] = old_angle
              if self.current_idx == page_idx:
                  self.show_current_page()
         else:
@@ -985,12 +1007,20 @@ class MainWindow(QMainWindow):
         if isinstance(item, dict) and item.get('type') == 'rotate':
              page_idx = item['page_idx']
              redo_data = item['data'] 
+             redo_angle = item.get('prev_angle', 0) # Wait, redo should be the NEXT angle?
+             # Item in redo_stack: {'type': 'rotate', 'page_idx', 'data': redone_img, 'prev_angle': redone_angle}
              
              # Save current to Undo
              current_data = self.pages[page_idx]
-             self.undo_stack.append({'type': 'rotate', 'page_idx': page_idx, 'data': current_data})
+             self.undo_stack.append({
+                 'type': 'rotate', 
+                 'page_idx': page_idx, 
+                 'data': current_data,
+                 'prev_angle': self.page_rotations[page_idx]
+             })
              
              self.pages[page_idx] = redo_data
+             self.page_rotations[page_idx] = redo_angle
              if self.current_idx == page_idx:
                  self.show_current_page()
         else:
@@ -1154,7 +1184,16 @@ class MainWindow(QMainWindow):
             generator = load_input_files(paths)
             for img_data, fname, pnum in generator:
                 self.pages.append((img_data, fname, pnum))
+                self.page_rotations.append(0)
                 QApplication.processEvents()
+            
+            # Apply any restored rotations if already set (e.g. from load_project_file)
+            # Wait, load_project_file calls this. 
+            # If load_project_file set rotations, we should apply them now.
+            for i in range(len(self.pages)):
+                if i < len(self.page_rotations) and self.page_rotations[i] != 0:
+                    self._apply_rotation_to_page(i, self.page_rotations[i], save_undo=False)
+
             self.show_current_page()
             
             # Reset Undo History after initial load
@@ -1204,27 +1243,34 @@ class MainWindow(QMainWindow):
         if not (0 <= self.current_idx < len(self.pages)):
             return
             
+        angle = 90 if direction == 'right' else -90
+        self._apply_rotation_to_page(self.current_idx, angle, save_undo=True)
+        self.set_unsaved_changes(True)
+        self.show_current_page()
+
+    def _apply_rotation_to_page(self, page_idx, angle, save_undo=True):
+        if not (0 <= page_idx < len(self.pages)):
+            return
+
         # 1. Save state for Undo
-        current_data = self.pages[self.current_idx] # (img_data, fname, pnum)
-        self.undo_stack.append({
-            'type': 'rotate', 
-            'page_idx': self.current_idx, 
-            'data': current_data
-        })
-        self.redo_stack.clear()
+        current_data = self.pages[page_idx]
+        if save_undo:
+            self.undo_stack.append({
+                'type': 'rotate', 
+                'page_idx': page_idx, 
+                'data': current_data,
+                'prev_angle': self.page_rotations[page_idx]
+            })
+            self.redo_stack.clear()
         
-        # 2. Rotate
+        # 2. Update cumulative angle
+        self.page_rotations[page_idx] = (self.page_rotations[page_idx] + angle) % 360
+        
+        # 3. Rotate image
         img, fname, pnum = current_data
         
-        # Handle bytes vs QPixmap/QImage
-        if isinstance(img, bytes):
-            qimg = QImage.fromData(img)
-        elif isinstance(img, QPixmap):
-            qimg = img.toImage()
-        else:
-            qimg = img
+        qimg = img if not isinstance(img, (bytes, QPixmap)) else (QImage.fromData(img) if isinstance(img, bytes) else img.toImage())
             
-        angle = 90 if direction == 'right' else -90
         transform = QTransform().rotate(angle)
         new_qimg = qimg.transformed(transform, Qt.TransformationMode.SmoothTransformation)
         
@@ -1236,8 +1282,8 @@ class MainWindow(QMainWindow):
         # Let's store as QPixmap for performance.
         new_img = QPixmap.fromImage(new_qimg)
         
-        # 3. Update
-        self.pages[self.current_idx] = (new_img, fname, pnum)
+        # 4. Update
+        self.pages[page_idx] = (new_img, fname, pnum)
         self.set_unsaved_changes(True)
         self.show_current_page()
             
