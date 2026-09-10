@@ -51,7 +51,7 @@ class ImageViewerDialog(QDialog):
         layout.addWidget(btn_close)
 
 class GroupEditDialog(QDialog):
-    def __init__(self, current_name, show_title, dynamic_naming=False, parent=None):
+    def __init__(self, current_name, show_title, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Group")
         self.layout = QVBoxLayout(self)
@@ -68,16 +68,13 @@ class GroupEditDialog(QDialog):
         self.show_title_chk.setChecked(show_title)
         self.layout.addWidget(self.show_title_chk)
         
-        self.dynamic_naming_chk = QCheckBox("Enable Dynamic Naming (%d, %D)")
-        self.dynamic_naming_chk.setChecked(dynamic_naming)
-        self.layout.addWidget(self.dynamic_naming_chk)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.layout.addWidget(self.buttons)
 
     def get_data(self):
-        return self.name_edit.text(), self.show_title_chk.isChecked(), self.dynamic_naming_chk.isChecked()
+        return self.name_edit.text(), self.show_title_chk.isChecked()
 
 class DragHandle(QLabel):
     def __init__(self, tree, item, parent=None):
@@ -492,12 +489,12 @@ class Sidebar(QWidget):
     def add_group(self):
         items_to_move = self.tree.selectedItems()
         
-        dlg = GroupEditDialog("", show_title=False, dynamic_naming=False, parent=self)
+        dlg = GroupEditDialog("", show_title=False, parent=self)
         if dlg.exec():
-            text, show_title, dynamic_naming = dlg.get_data()
+            text, show_title = dlg.get_data()
             
             group_item = QTreeWidgetItem()
-            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "title": text, "show_title": show_title, "dynamic_naming": dynamic_naming})
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "title": text, "show_title": show_title})
             
             parent, idx = self.get_insert_location()
             if items_to_move:
@@ -595,12 +592,11 @@ class Sidebar(QWidget):
             self.request_recrop.emit(item)
         elif data.get("type") == "group":
             # Group Edit Dialog
-            dlg = GroupEditDialog(data["title"], data.get("show_title", False), data.get("dynamic_naming", False), self)
+            dlg = GroupEditDialog(data["title"], data.get("show_title", False), self)
             if dlg.exec():
-                text, show_title, dynamic_naming = dlg.get_data()
+                text, show_title = dlg.get_data()
                 data["title"] = text
                 data["show_title"] = show_title
-                data["dynamic_naming"] = dynamic_naming
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
                 self.state_changed.emit()
@@ -738,7 +734,6 @@ class Sidebar(QWidget):
                 if not data: continue
                 
                 is_group = data.get("type") == "group"
-                dynamic = data.get("dynamic_naming", False) if is_group else False
                 
                 if is_group:
                     local_idx = 1
@@ -751,7 +746,7 @@ class Sidebar(QWidget):
                         new_title = template
                         changed = False
                         
-                        if dynamic and "%d" in template:
+                        if "%d" in template:
                             new_title = new_title.replace("%d", str(local_idx))
                             changed = True
                         if "%D" in template:
