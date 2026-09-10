@@ -51,7 +51,7 @@ class ImageViewerDialog(QDialog):
         layout.addWidget(btn_close)
 
 class GroupEditDialog(QDialog):
-    def __init__(self, current_name, show_title, parent=None):
+    def __init__(self, current_name, show_title, dynamic_naming=False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Group")
         self.layout = QVBoxLayout(self)
@@ -60,7 +60,7 @@ class GroupEditDialog(QDialog):
         self.layout.addWidget(self.name_label)
         
         self.name_input = QInputDialog() # We just use a line edit
-        from PyQt6.QtWidgets import QLineEdit
+        from PyQt6.QtWidgets import QLineEdit, QCheckBox
         self.name_edit = QLineEdit(current_name)
         self.layout.addWidget(self.name_edit)
         
@@ -68,13 +68,16 @@ class GroupEditDialog(QDialog):
         self.show_title_chk.setChecked(show_title)
         self.layout.addWidget(self.show_title_chk)
         
+        self.dynamic_naming_chk = QCheckBox("Enable Dynamic Naming (%d, %D)")
+        self.dynamic_naming_chk.setChecked(dynamic_naming)
+        self.layout.addWidget(self.dynamic_naming_chk)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.layout.addWidget(self.buttons)
 
     def get_data(self):
-        return self.name_edit.text(), self.show_title_chk.isChecked()
+        return self.name_edit.text(), self.show_title_chk.isChecked(), self.dynamic_naming_chk.isChecked()
 
 class DragHandle(QLabel):
     def __init__(self, tree, item, parent=None):
@@ -402,6 +405,7 @@ class Sidebar(QWidget):
         self.tree.itemDoubleClicked.connect(self.on_item_double_click)
         self.tree.widgets_refreshed.connect(self.restore_widgets)
         self.tree.widgets_refreshed.connect(self.state_changed.emit)
+        self.state_changed.connect(self.evaluate_dynamic_titles)
         self.layout.addWidget(self.tree)
         
         self.pending_container = QWidget()
@@ -488,12 +492,12 @@ class Sidebar(QWidget):
     def add_group(self):
         items_to_move = self.tree.selectedItems()
         
-        dlg = GroupEditDialog("", show_title=False, parent=self)
+        dlg = GroupEditDialog("", show_title=False, dynamic_naming=False, parent=self)
         if dlg.exec():
-            text, show_title = dlg.get_data()
+            text, show_title, dynamic_naming = dlg.get_data()
             
             group_item = QTreeWidgetItem()
-            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "title": text, "show_title": show_title})
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "title": text, "show_title": show_title, "dynamic_naming": dynamic_naming})
             
             parent, idx = self.get_insert_location()
             if items_to_move:
@@ -591,20 +595,22 @@ class Sidebar(QWidget):
             self.request_recrop.emit(item)
         elif data.get("type") == "group":
             # Group Edit Dialog
-            dlg = GroupEditDialog(data["title"], data.get("show_title", False), self)
+            dlg = GroupEditDialog(data["title"], data.get("show_title", False), data.get("dynamic_naming", False), self)
             if dlg.exec():
-                text, show_title = dlg.get_data()
+                text, show_title, dynamic_naming = dlg.get_data()
                 data["title"] = text
                 data["show_title"] = show_title
+                data["dynamic_naming"] = dynamic_naming
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
                 self.state_changed.emit()
         else:
             # Title Rename
-            current_title = data["title"]
+            current_title = data.get("title_template", data["title"])
             text, ok = QInputDialog.getText(self, "Rename", "New name:", text=current_title)
             if ok and text:
                 data["title"] = text
+                data["title_template"] = text
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
                 self.state_changed.emit()
@@ -695,10 +701,11 @@ class Sidebar(QWidget):
             
             widget = self.tree.itemWidget(item, 0)
             
-            current_title = data["title"]
+            current_title = data.get("title_template", data["title"])
             text, ok = QInputDialog.getText(self, "Rename", "New name:", text=current_title)
             if ok and text:
                 data["title"] = text
+                data["title_template"] = text
                 item.setData(0, Qt.ItemDataRole.UserRole, data)
                 widget.set_text(text)
                 changed = True
@@ -706,9 +713,12 @@ class Sidebar(QWidget):
             text, ok = QInputDialog.getText(self, "Mass Rename", "New Title Template (use %d for number):")
             if ok and text:
                 for i, item in enumerate(items):
-                    new_title = text.replace("%d", str(i+1)) if "%d" in text else f"{text} {i+1}"
+                    has_format = "%d" in text or "%D" in text
+                    new_title = text.replace("%d", str(i+1)) if has_format else f"{text} {i+1}"
+                    template = text if has_format else f"{text} {i+1}"
                     data = item.data(0, Qt.ItemDataRole.UserRole)
                     data["title"] = new_title
+                    data["title_template"] = template
                     item.setData(0, Qt.ItemDataRole.UserRole, data)
                     widget = self.tree.itemWidget(item, 0)
                     if widget: widget.set_text(new_title)
@@ -716,6 +726,60 @@ class Sidebar(QWidget):
         
         if changed:
             self.state_changed.emit()
+
+    def evaluate_dynamic_titles(self):
+        if getattr(self, "_evaluating_titles", False): return
+        self._evaluating_titles = True
+        try:
+            global_idx = 1
+            for i in range(self.tree.topLevelItemCount()):
+                top_item = self.tree.topLevelItem(i)
+                data = top_item.data(0, Qt.ItemDataRole.UserRole)
+                if not data: continue
+                
+                is_group = data.get("type") == "group"
+                dynamic = data.get("dynamic_naming", False) if is_group else False
+                
+                if is_group:
+                    local_idx = 1
+                    for j in range(top_item.childCount()):
+                        child = top_item.child(j)
+                        child_data = child.data(0, Qt.ItemDataRole.UserRole)
+                        if not child_data: continue
+                        
+                        template = child_data.get("title_template", child_data["title"])
+                        new_title = template
+                        changed = False
+                        
+                        if dynamic and "%d" in template:
+                            new_title = new_title.replace("%d", str(local_idx))
+                            changed = True
+                        if "%D" in template:
+                            new_title = new_title.replace("%D", str(global_idx))
+                            changed = True
+                            
+                        if changed:
+                            child_data["title"] = new_title
+                            child_data["title_template"] = template
+                            child.setData(0, Qt.ItemDataRole.UserRole, child_data)
+                            widget = self.tree.itemWidget(child, 0)
+                            if widget: widget.set_text(new_title)
+                        
+                        local_idx += 1
+                        global_idx += 1
+                else:
+                    template = data.get("title_template", data["title"])
+                    if "%D" in template:
+                        new_title = template.replace("%D", str(global_idx))
+                        data["title"] = new_title
+                        data["title_template"] = template
+                        top_item.setData(0, Qt.ItemDataRole.UserRole, data)
+                        widget = self.tree.itemWidget(top_item, 0)
+                        if widget: widget.set_text(new_title)
+                        
+                    global_idx += 1
+        finally:
+            self._evaluating_titles = False
 
     def update_pending_exercise(self, pixmap):
         if not self.pending_container.isVisible():
