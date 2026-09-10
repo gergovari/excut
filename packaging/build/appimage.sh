@@ -6,7 +6,7 @@ set -e
 
 # 1. Setup paths
 BASE_DIR=$(pwd)
-VERSION="v0.26" # Initial placeholder, will be bumped
+VERSION="v0.27" # Initial placeholder, will be bumped
 ARCH=$(uname -m)
 PACKAGING_DIR="$BASE_DIR/packaging"
 BUILD_TOOLS_DIR="$PACKAGING_DIR/build"
