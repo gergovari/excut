@@ -257,32 +257,62 @@ class SidebarTree(QTreeWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
 
     def dragMoveEvent(self, event):
-        target = self.itemAt(event.position().toPoint())
-        is_group = False
-        if target:
-            data = target.data(0, Qt.ItemDataRole.UserRole)
-            is_group = (data and data.get("type") == "group")
-            
-        pos = self.dropIndicatorPosition()
-        
-        # Strict Rule: Only Groups can accept "OnItem" drops (nesting)
-        # We REJECT (ignore) the event if user strictly tries to drop ON a non-group.
-        # This hints the view to look for other options (like Above/Below).
-        # However, if this makes "between" dropping impossible, we might need to rely on default behavior.
-        # Default behavior of QTreeWidget usually allows dropping ON anything.
-        if pos == QAbstractItemView.DropIndicatorPosition.OnItem and not is_group:
-            event.ignore() 
-            return
-
         super().dragMoveEvent(event)
 
     def keyPressEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.AltModifier:
+            if event.key() == Qt.Key.Key_Up:
+                self.move_item_up()
+                return
+            elif event.key() == Qt.Key.Key_Down:
+                self.move_item_down()
+                return
+
         if event.key() == Qt.Key.Key_Down:
             self.navigate_next()
         elif event.key() == Qt.Key.Key_Up:
             self.navigate_prev()
         else:
             super().keyPressEvent(event)
+
+    def move_item_up(self, item=None):
+        if item is None:
+            item = self.currentItem()
+        if not item: return
+        parent = item.parent() or self.invisibleRootItem()
+        idx = parent.indexOfChild(item)
+        if idx > 0:
+            taken = parent.takeChild(idx)
+            parent.insertChild(idx - 1, taken)
+            self.setCurrentItem(taken)
+            self.widgets_refreshed.emit()
+
+    def move_item_down(self, item=None):
+        if item is None:
+            item = self.currentItem()
+        if not item: return
+        parent = item.parent() or self.invisibleRootItem()
+        idx = parent.indexOfChild(item)
+        if idx < parent.childCount() - 1:
+            taken = parent.takeChild(idx)
+            parent.insertChild(idx + 1, taken)
+            self.setCurrentItem(taken)
+            self.widgets_refreshed.emit()
+
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item:
+            menu = QMenu(self)
+            move_up = menu.addAction("Move Up\tAlt+Up")
+            move_down = menu.addAction("Move Down\tAlt+Down")
+            
+            action = menu.exec(event.globalPos())
+            if action == move_up:
+                self.move_item_up(item)
+            elif action == move_down:
+                self.move_item_down(item)
+        else:
+            super().contextMenuEvent(event)
 
     def navigate_next(self):
         selected = self.selectedItems()
@@ -357,6 +387,7 @@ class Sidebar(QWidget):
             "<b>Controls:</b><br>"
             "Page: Arrows, H/L<br>"
             "Nav: J/K/Arrows<br>"
+            "Move Item: Alt+Up/Down<br>"
             "Cut: Enter | Append: Shift+Enter<br>"
             "Edit Group: Dbl Click/Pencil<br>"
             "Sticky: Dbl Click Preview<br>"
@@ -735,6 +766,14 @@ class Sidebar(QWidget):
                 stack.append(item.child(i))
 
     def keyPressEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.AltModifier:
+            if event.key() == Qt.Key.Key_Up:
+                self.tree.move_item_up()
+                return
+            elif event.key() == Qt.Key.Key_Down:
+                self.tree.move_item_down()
+                return
+
         if event.key() == Qt.Key.Key_J:
             self.tree.navigate_next()
         elif event.key() == Qt.Key.Key_K:
