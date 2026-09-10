@@ -340,6 +340,39 @@ class SettingsDialog(QDialog):
             "bg_image": self.bg_edit.text()
         }
 
+class FloatingPreviewWindow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setWindowTitle("Cut Preview")
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.image_label = QLabel("No cut selected")
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(self.image_label)
+        self.current_pixmap = None
+        self.resize(300, 300)
+
+    def set_pixmap(self, pixmap):
+        self.current_pixmap = pixmap
+        self.update_image()
+
+    def update_image(self):
+        if self.current_pixmap:
+            scaled_pixmap = self.current_pixmap.scaled(
+                self.size(), 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.image_label.setPixmap(scaled_pixmap)
+        else:
+            self.image_label.clear()
+            self.image_label.setText("No cut selected")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_image()
+
 class MainWindow(QMainWindow):
     def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4", default_save_path=None):
         super().__init__()
@@ -379,6 +412,8 @@ class MainWindow(QMainWindow):
         self.undo_stack = []
         self.redo_stack = []
         self.current_state_snapshot = []
+        
+        self.floating_preview_window = None
         
         QTimer.singleShot(0, self.load_data)
 
@@ -437,6 +472,11 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(self.open_settings)
         proj_menu.addAction(settings_action)
         
+        view_menu = menubar.addMenu("View")
+        float_preview_action = QAction("Floating Cut Preview", self)
+        float_preview_action.triggered.connect(self.toggle_floating_preview)
+        view_menu.addAction(float_preview_action)
+        
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QHBoxLayout(self.central_widget)
@@ -473,6 +513,7 @@ class MainWindow(QMainWindow):
         self.sidebar.request_recrop.connect(self.handle_recrop)
         self.sidebar.request_discard.connect(self.discard_pending)
         self.sidebar.state_changed.connect(self.on_sidebar_change)
+        self.sidebar.tree.itemSelectionChanged.connect(self.update_floating_preview)
         
         self.splitter.setSizes([900, 300])
         
@@ -498,6 +539,27 @@ class MainWindow(QMainWindow):
         self.shortcut_k.activated.connect(self.sidebar.tree.navigate_prev)
 
         self.apply_theme(self.theme)
+
+    def toggle_floating_preview(self):
+        if self.floating_preview_window is None:
+            self.floating_preview_window = FloatingPreviewWindow(self)
+        
+        if self.floating_preview_window.isVisible():
+            self.floating_preview_window.hide()
+        else:
+            self.floating_preview_window.show()
+            self.update_floating_preview()
+
+    def update_floating_preview(self):
+        if self.floating_preview_window and self.floating_preview_window.isVisible():
+            items = self.sidebar.tree.selectedItems()
+            if items:
+                item = items[0]
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                if data and data.get("type") == "image" and data.get("content"):
+                    self.floating_preview_window.set_pixmap(data.get("content"))
+                    return
+            self.floating_preview_window.set_pixmap(None)
 
     def discard_pending(self):
         self.pending_parts = []
