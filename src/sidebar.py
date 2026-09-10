@@ -26,6 +26,26 @@ def draw_pen_icon():
     painter.end()
     return QIcon(pix)
 
+def draw_brush_icon():
+    pix = QPixmap(24, 24)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    
+    painter.setPen(QPen(QColor("#d4d4d4"), 2))
+    painter.setBrush(QColor("#d4d4d4"))
+    
+    # Draw simple brush
+    painter.translate(12, 12)
+    painter.rotate(45)
+    # Handle
+    painter.drawRect(-2, 0, 4, 10)
+    # Bristles
+    painter.drawEllipse(QPoint(0, -2), 4, 6)
+    
+    painter.end()
+    return QIcon(pix)
+
 class ImageViewerDialog(QDialog):
     def __init__(self, pixmap, parent=None):
         super().__init__(parent)
@@ -113,6 +133,7 @@ class SidebarItemWidget(QWidget):
     delete_clicked = pyqtSignal()
     edit_clicked = pyqtSignal()
     copy_clicked = pyqtSignal()
+    paint_clicked = pyqtSignal()
     
     def __init__(self, text, tree, item, icon=None, is_title=False, is_group=False):
         super().__init__()
@@ -178,6 +199,15 @@ class SidebarItemWidget(QWidget):
         btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_edit.clicked.connect(self.edit_clicked.emit)
         
+        btn_paint = QPushButton()
+        btn_paint.setIcon(draw_brush_icon())
+        btn_paint.setToolTip("Paint on Cut")
+        btn_paint.setFixedSize(24, 24)
+        btn_paint.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_paint.clicked.connect(self.paint_clicked.emit)
+        if self.is_group or self.is_title:
+            btn_paint.hide()
+        
         btn_copy = QPushButton()
         btn_copy.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)) # File look
         btn_copy.setToolTip("Duplicate")
@@ -194,6 +224,8 @@ class SidebarItemWidget(QWidget):
         btn_del.clicked.connect(self.delete_clicked.emit)
         
         btn_layout.addWidget(btn_edit)
+        if not (self.is_group or self.is_title):
+            btn_layout.addWidget(btn_paint)
         btn_layout.addWidget(btn_copy)
         btn_layout.addWidget(btn_del)
         
@@ -374,6 +406,7 @@ class Sidebar(QWidget):
     finish_clicked = pyqtSignal()
     request_recrop = pyqtSignal(object) 
     request_discard = pyqtSignal()
+    request_paint = pyqtSignal(object)
     state_changed = pyqtSignal()
     
     def __init__(self, parent=None):
@@ -577,6 +610,7 @@ class Sidebar(QWidget):
         widget.delete_clicked.connect(lambda: self.delete_item(item))
         widget.edit_clicked.connect(lambda: self.edit_item(item, widget))
         widget.copy_clicked.connect(lambda: self.copy_item(item))
+        widget.paint_clicked.connect(lambda: self.request_paint.emit(item))
         self.tree.setItemWidget(item, 0, widget)
 
     def delete_item(self, item, emit_signal=True):

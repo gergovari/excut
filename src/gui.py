@@ -512,6 +512,7 @@ class MainWindow(QMainWindow):
         self.sidebar.finish_clicked.connect(self.finish_process)
         self.sidebar.request_recrop.connect(self.handle_recrop)
         self.sidebar.request_discard.connect(self.discard_pending)
+        self.sidebar.request_paint.connect(self.handle_paint)
         self.sidebar.state_changed.connect(self.on_sidebar_change)
         self.sidebar.tree.itemSelectionChanged.connect(self.update_floating_preview)
         
@@ -1420,6 +1421,84 @@ class MainWindow(QMainWindow):
                     # Ensure icon in tree is updated too
                     item.setIcon(0, QIcon(new_pix))
             
+    def handle_paint(self, item):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or data.get("type") != "image": return
+        
+        parts = data.get("parts", [])
+        if not parts: return
+        
+        pixmap = data.get("content")
+        if not pixmap: return
+        
+        from .paint_dialog import PaintDialog
+        dlg = PaintDialog(pixmap, self)
+        if dlg.exec():
+            strokes = dlg.get_strokes()
+            if not strokes: return
+            
+            modified_pages = set()
+            y_offset = 0
+            
+            for p in parts:
+                meta = p[1] if isinstance(p, tuple) else p
+                page_idx = meta.get("page_idx")
+                rect = meta.get("rect")
+                if isinstance(rect, list):
+                    rect = QRect(*rect)
+                
+                part_height = rect.height()
+                
+                if 0 <= page_idx < len(self.pages):
+                    img_data, fname, pnum = self.pages[page_idx]
+                    
+                    if isinstance(img_data, QImage):
+                        full_pix = QPixmap.fromImage(img_data)
+                    elif isinstance(img_data, QPixmap):
+                        full_pix = QPixmap(img_data)
+                    else:
+                        img = QImage.fromData(img_data)
+                        full_pix = QPixmap.fromImage(img)
+                        
+                    painter = QPainter(full_pix)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setClipRect(rect)
+                    painter.translate(rect.left(), rect.top() - y_offset)
+                    
+                    for path, color, size in strokes:
+                        pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                        painter.setPen(pen)
+                        painter.drawPath(path)
+                        
+                    painter.end()
+                    
+                    self.pages[page_idx] = (full_pix, fname, pnum)
+                    modified_pages.add(page_idx)
+                
+                y_offset += part_height
+                
+            if modified_pages:
+                self._update_items_on_paint(modified_pages)
+                self.set_unsaved_changes(True)
+                self.show_current_page() # refresh canvas
+
+    def _update_items_on_paint(self, page_indices):
+        for item, data in self.sidebar.iter_all_items():
+            if data.get("type") == "image" and "parts" in data:
+                updated = False
+                for p in data["parts"]:
+                    meta = p[1] if isinstance(p, tuple) else p
+                    if meta.get("page_idx") in page_indices:
+                        updated = True
+                        break
+                
+                if updated:
+                    new_pix = self._reconstruct_pixmap(data["parts"])
+                    data["content"] = new_pix
+                    item.setData(0, Qt.ItemDataRole.UserRole, data)
+                    widget = self.sidebar.tree.itemWidget(item, 0)
+                    if widget:
+                        widget.set_icon(new_pix)
 
 
     def cut_selection(self, is_partial):
