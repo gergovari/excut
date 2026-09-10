@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QColorDialog, QSlider, QWidget
 )
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, pyqtSignal, QSize
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QKeySequence
 
 class PaintCanvas(QWidget):
     def __init__(self, pixmap, parent=None):
@@ -10,8 +10,10 @@ class PaintCanvas(QWidget):
         self.base_pixmap = pixmap
         self.setMinimumSize(300, 300)
         
-        self.strokes = [] # List of (QPainterPath, QColor, size)
+        self.strokes = [] # List of (QPainterPath, dict)
+        self.redo_stack = [] # List of (QPainterPath, dict)
         self.current_path = None
+        self.current_points = []
         
         self.brush_color = QColor(255, 0, 0)
         self.brush_size = 5
@@ -41,8 +43,8 @@ class PaintCanvas(QWidget):
         
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        for path, color, size in self.strokes:
-            pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        for path, stroke_dict in self.strokes:
+            pen = QPen(QColor(stroke_dict["color"]), stroke_dict["size"], Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             painter.drawPath(path)
             
@@ -57,25 +59,44 @@ class PaintCanvas(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            pt = self._map_to_image(event)
             self.current_path = QPainterPath()
-            self.current_path.moveTo(self._map_to_image(event))
+            self.current_path.moveTo(pt)
+            self.current_points = [[pt.x(), pt.y()]]
+            self.redo_stack.clear()
             self.update()
 
     def mouseMoveEvent(self, event):
         if self.current_path:
-            self.current_path.lineTo(self._map_to_image(event))
+            pt = self._map_to_image(event)
+            self.current_path.lineTo(pt)
+            self.current_points.append([pt.x(), pt.y()])
             self.update()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.current_path:
-            self.current_path.lineTo(self._map_to_image(event))
-            self.strokes.append((self.current_path, self.brush_color, self.brush_size))
+            pt = self._map_to_image(event)
+            self.current_path.lineTo(pt)
+            self.current_points.append([pt.x(), pt.y()])
+            
+            stroke_dict = {
+                "points": self.current_points,
+                "color": self.brush_color.name(),
+                "size": self.brush_size
+            }
+            self.strokes.append((self.current_path, stroke_dict))
             self.current_path = None
+            self.current_points = []
             self.update()
 
     def undo(self):
         if self.strokes:
-            self.strokes.pop()
+            self.redo_stack.append(self.strokes.pop())
+            self.update()
+            
+    def redo(self):
+        if self.redo_stack:
+            self.strokes.append(self.redo_stack.pop())
             self.update()
 
 class PaintDialog(QDialog):
@@ -100,8 +121,14 @@ class PaintDialog(QDialog):
         toolbar.addWidget(self.size_slider)
         
         self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_btn.clicked.connect(self.undo)
         toolbar.addWidget(self.undo_btn)
+        
+        self.redo_btn = QPushButton("Redo")
+        self.redo_btn.setShortcut(QKeySequence("Ctrl+Y"))
+        self.redo_btn.clicked.connect(self.redo)
+        toolbar.addWidget(self.redo_btn)
         
         toolbar.addStretch()
         self.layout.addLayout(toolbar)
@@ -138,6 +165,9 @@ class PaintDialog(QDialog):
 
     def undo(self):
         self.canvas.undo()
+        
+    def redo(self):
+        self.canvas.redo()
 
     def get_strokes(self):
-        return self.canvas.strokes
+        return [s[1] for s in self.canvas.strokes]

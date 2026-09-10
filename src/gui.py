@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter, QMessageBox, QProgressDialog, 
     QDialog, QVBoxLayout, QPushButton, QApplication, QLabel, QFileDialog, QMenuBar, QMenu,
-    QFormLayout, QLineEdit, QComboBox, QScrollArea
+    QFormLayout, QLineEdit, QComboBox, QScrollArea, QSlider, QColorDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF
 from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage, QPen, QBrush, QIcon
@@ -340,38 +340,105 @@ class SettingsDialog(QDialog):
             "bg_image": self.bg_edit.text()
         }
 
+from .paint_dialog import PaintCanvas
+
 class FloatingPreviewWindow(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, main_window, parent=None):
         super().__init__(parent)
+        self.main_window = main_window
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowTitle("Cut Preview")
+        self.setWindowTitle("Cut Preview / Quick Edit")
+        self.resize(400, 400)
+        
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
-        self.image_label = QLabel("No cut selected")
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(self.image_label)
-        self.current_pixmap = None
-        self.resize(300, 300)
+        
+        self.toolbar = QHBoxLayout()
+        self.color_btn = QPushButton("Color")
+        self.color_btn.clicked.connect(self.choose_color)
+        self.toolbar.addWidget(self.color_btn)
+        
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setRange(1, 50)
+        self.size_slider.setValue(5)
+        self.size_slider.valueChanged.connect(self.size_changed)
+        self.toolbar.addWidget(QLabel("Size:"))
+        self.toolbar.addWidget(self.size_slider)
+        
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_btn.clicked.connect(self.undo)
+        self.toolbar.addWidget(self.undo_btn)
+        
+        self.redo_btn = QPushButton("Redo")
+        self.redo_btn.setShortcut(QKeySequence("Ctrl+Y"))
+        self.redo_btn.clicked.connect(self.redo)
+        self.toolbar.addWidget(self.redo_btn)
+        
+        self.save_btn = QPushButton("Save")
+        self.save_btn.clicked.connect(self.save_strokes)
+        self.toolbar.addWidget(self.save_btn)
+        
+        self.toolbar_widget = QWidget()
+        self.toolbar_widget.setLayout(self.toolbar)
+        self.layout.addWidget(self.toolbar_widget)
+        
+        self.canvas_container = QVBoxLayout()
+        self.layout.addLayout(self.canvas_container)
+        
+        self.canvas = None
+        self.current_item = None
+        self.empty_label = QLabel("No cut selected")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.canvas_container.addWidget(self.empty_label)
 
-    def set_pixmap(self, pixmap):
-        self.current_pixmap = pixmap
-        self.update_image()
-
-    def update_image(self):
-        if self.current_pixmap:
-            scaled_pixmap = self.current_pixmap.scaled(
-                self.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.image_label.setPixmap(scaled_pixmap)
+    def set_pixmap(self, pixmap, item=None):
+        self.current_item = item
+        if self.canvas:
+            self.canvas_container.removeWidget(self.canvas)
+            self.canvas.deleteLater()
+            self.canvas = None
+            
+        if pixmap:
+            self.empty_label.hide()
+            self.canvas = PaintCanvas(pixmap)
+            self.canvas_container.addWidget(self.canvas)
+            self.update_color_btn()
         else:
-            self.image_label.clear()
-            self.image_label.setText("No cut selected")
+            self.empty_label.show()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.update_image()
+    def choose_color(self):
+        if not self.canvas: return
+        color = QColorDialog.getColor(self.canvas.brush_color, self, "Choose Color", QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        if color.isValid():
+            self.canvas.brush_color = color
+            self.update_color_btn()
+
+    def size_changed(self, value):
+        if self.canvas:
+            self.canvas.brush_size = value
+
+    def update_color_btn(self):
+        if not self.canvas: return
+        color = self.canvas.brush_color.name()
+        self.color_btn.setStyleSheet(f"background-color: {color}; color: {'white' if self.canvas.brush_color.lightness() < 128 else 'black'};")
+
+    def undo(self):
+        if self.canvas:
+            self.canvas.undo()
+
+    def redo(self):
+        if self.canvas:
+            self.canvas.redo()
+
+    def save_strokes(self):
+        if not self.canvas or not self.current_item: return
+        strokes = [s[1] for s in self.canvas.strokes]
+        if not strokes: return
+        
+        self.main_window.apply_strokes_to_item(self.current_item, strokes)
+        self.canvas.strokes = []
+        self.canvas.redo_stack = []
 
 class MainWindow(QMainWindow):
     def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4", default_save_path=None):
@@ -405,6 +472,7 @@ class MainWindow(QMainWindow):
         
         self.pages = [] # List of (img_data, filename, page_num)
         self.page_rotations = [] # List of cumulative rotation angles
+        self.page_strokes = {} # dict mapping page_idx -> list of stroke dicts
         self.current_idx = 0
         self.pending_parts = []
         
@@ -543,7 +611,7 @@ class MainWindow(QMainWindow):
 
     def toggle_floating_preview(self):
         if self.floating_preview_window is None:
-            self.floating_preview_window = FloatingPreviewWindow(self)
+            self.floating_preview_window = FloatingPreviewWindow(self, self)
         
         if self.floating_preview_window.isVisible():
             self.floating_preview_window.hide()
@@ -558,9 +626,9 @@ class MainWindow(QMainWindow):
                 item = items[0]
                 data = item.data(0, Qt.ItemDataRole.UserRole)
                 if data and data.get("type") == "image" and data.get("content"):
-                    self.floating_preview_window.set_pixmap(data.get("content"))
+                    self.floating_preview_window.set_pixmap(data.get("content"), item)
                     return
-            self.floating_preview_window.set_pixmap(None)
+            self.floating_preview_window.set_pixmap(None, None)
 
     def discard_pending(self):
         self.pending_parts = []
@@ -647,6 +715,7 @@ class MainWindow(QMainWindow):
                 "sticky_mode": self.sidebar.sticky_mode,
                 "pending_parts": pending_state,
                 "page_rotations": self.page_rotations,
+                "page_strokes": self.page_strokes,
                 "undo_stack": self._serialize_stack(self.undo_stack),
                 "redo_stack": self._serialize_stack(self.redo_stack)
             }
@@ -823,7 +892,18 @@ class MainWindow(QMainWindow):
             if "page_rotations" in metadata:
                  self.page_rotations = metadata["page_rotations"]
                  
+            self.page_strokes = metadata.get("page_strokes", {})
+            if isinstance(self.page_strokes, list):
+                self.page_strokes = {str(i): s for i, s in enumerate(self.page_strokes)}
+            self.page_strokes = {int(k): v for k, v in self.page_strokes.items()}
+            
             self.load_images_from_paths(self.input_paths)
+            
+            # Apply loaded strokes
+            for p_idx_str, strokes in self.page_strokes.items():
+                p_idx = int(p_idx_str)
+                if 0 <= p_idx < len(self.pages):
+                    self._apply_strokes_to_page(p_idx, strokes)
             self._restore_sidebar_items(items)
             
             if "current_idx" in metadata:
@@ -1437,50 +1517,71 @@ class MainWindow(QMainWindow):
             strokes = dlg.get_strokes()
             if not strokes: return
             
-            modified_pages = set()
-            y_offset = 0
+            self.apply_strokes_to_item(item, strokes)
             
-            for p in parts:
-                meta = p[1] if isinstance(p, tuple) else p
-                page_idx = meta.get("page_idx")
-                rect = meta.get("rect")
-                if isinstance(rect, list):
-                    rect = QRect(*rect)
+    def apply_strokes_to_item(self, item, strokes):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        parts = data.get("parts", [])
+        
+        modified_pages = set()
+        y_offset = 0
+        
+        for p in parts:
+            meta = p[1] if isinstance(p, tuple) else p
+            page_idx = meta.get("page_idx")
+            rect = meta.get("rect")
+            if isinstance(rect, list):
+                rect = QRect(*rect)
+            
+            part_height = rect.height()
+            
+            if 0 <= page_idx < len(self.pages):
+                img_data, fname, pnum = self.pages[page_idx]
                 
-                part_height = rect.height()
-                
-                if 0 <= page_idx < len(self.pages):
-                    img_data, fname, pnum = self.pages[page_idx]
+                if isinstance(img_data, QImage):
+                    full_pix = QPixmap.fromImage(img_data)
+                elif isinstance(img_data, QPixmap):
+                    full_pix = QPixmap(img_data)
+                else:
+                    img = QImage.fromData(img_data)
+                    full_pix = QPixmap.fromImage(img)
                     
-                    if isinstance(img_data, QImage):
-                        full_pix = QPixmap.fromImage(img_data)
-                    elif isinstance(img_data, QPixmap):
-                        full_pix = QPixmap(img_data)
-                    else:
-                        img = QImage.fromData(img_data)
-                        full_pix = QPixmap.fromImage(img)
-                        
-                    painter = QPainter(full_pix)
-                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                    painter.setClipRect(rect)
-                    painter.translate(rect.left(), rect.top() - y_offset)
-                    
-                    for path, color, size in strokes:
-                        pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-                        painter.setPen(pen)
-                        painter.drawPath(path)
-                        
-                    painter.end()
-                    
-                    self.pages[page_idx] = (full_pix, fname, pnum)
-                    modified_pages.add(page_idx)
+                painter = QPainter(full_pix)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setClipRect(rect)
+                painter.translate(rect.left(), rect.top() - y_offset)
                 
-                y_offset += part_height
+                for stroke_dict in strokes:
+                    color = QColor(stroke_dict["color"])
+                    size = stroke_dict["size"]
+                    
+                    path = QPainterPath()
+                    pts = stroke_dict["points"]
+                    if pts:
+                        path.moveTo(QPointF(pts[0][0], pts[0][1]))
+                        for pt in pts[1:]:
+                            path.lineTo(QPointF(pt[0], pt[1]))
+                            
+                    pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                    painter.setPen(pen)
+                    painter.drawPath(path)
+                    
+                painter.end()
                 
-            if modified_pages:
-                self._update_items_on_paint(modified_pages)
-                self.set_unsaved_changes(True)
-                self.show_current_page() # refresh canvas
+                self.pages[page_idx] = (full_pix, fname, pnum)
+                modified_pages.add(page_idx)
+                
+                if page_idx not in self.page_strokes:
+                    self.page_strokes[page_idx] = []
+                self.page_strokes[page_idx].extend(strokes)
+            
+            y_offset += part_height
+            
+        if modified_pages:
+            self._update_items_on_paint(modified_pages)
+            self.set_unsaved_changes(True)
+            self.show_current_page() # refresh canvas
+            self.update_floating_preview()
 
     def _update_items_on_paint(self, page_indices):
         for item, data in self.sidebar.iter_all_items():
@@ -1499,6 +1600,41 @@ class MainWindow(QMainWindow):
                     widget = self.sidebar.tree.itemWidget(item, 0)
                     if widget:
                         widget.set_icon(new_pix)
+
+    def _apply_strokes_to_page(self, page_idx, strokes):
+        if not strokes or page_idx < 0 or page_idx >= len(self.pages):
+            return
+            
+        img_data, fname, pnum = self.pages[page_idx]
+        
+        if isinstance(img_data, QImage):
+            full_pix = QPixmap.fromImage(img_data)
+        elif isinstance(img_data, QPixmap):
+            full_pix = QPixmap(img_data)
+        else:
+            img = QImage.fromData(img_data)
+            full_pix = QPixmap.fromImage(img)
+            
+        painter = QPainter(full_pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        for stroke_dict in strokes:
+            color = QColor(stroke_dict["color"])
+            size = stroke_dict["size"]
+            
+            path = QPainterPath()
+            pts = stroke_dict["points"]
+            if pts:
+                path.moveTo(QPointF(pts[0][0], pts[0][1]))
+                for pt in pts[1:]:
+                    path.lineTo(QPointF(pt[0], pt[1]))
+                    
+            pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPath(path)
+            
+        painter.end()
+        self.pages[page_idx] = (full_pix, fname, pnum)
 
 
     def cut_selection(self, is_partial):
