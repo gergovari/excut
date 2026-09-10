@@ -1,23 +1,42 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QColorDialog, QSlider, QWidget
 )
-from PyQt6.QtCore import Qt, QPoint, QRect, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath
 
 class PaintCanvas(QWidget):
     def __init__(self, pixmap, parent=None):
         super().__init__(parent)
         self.base_pixmap = pixmap
-        self.setFixedSize(pixmap.size())
+        self.setMinimumSize(300, 300)
         
         self.strokes = [] # List of (QPainterPath, QColor, size)
         self.current_path = None
         
         self.brush_color = QColor(255, 0, 0)
         self.brush_size = 5
+        self.scale_factor = 1.0
+        self.offset = QPointF(0, 0)
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.GlobalColor.darkGray)
+        
+        w, h = self.width(), self.height()
+        bw, bh = self.base_pixmap.width(), self.base_pixmap.height()
+        
+        scale_w = w / bw if bw > 0 else 1.0
+        scale_h = h / bh if bh > 0 else 1.0
+        self.scale_factor = min(scale_w, scale_h)
+        
+        draw_w = bw * self.scale_factor
+        draw_h = bh * self.scale_factor
+        
+        self.offset = QPointF((w - draw_w) / 2.0, (h - draw_h) / 2.0)
+        
+        painter.translate(self.offset)
+        painter.scale(self.scale_factor, self.scale_factor)
+        
         painter.drawPixmap(0, 0, self.base_pixmap)
         
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -32,20 +51,24 @@ class PaintCanvas(QWidget):
             painter.setPen(pen)
             painter.drawPath(self.current_path)
 
+    def _map_to_image(self, event):
+        pos = event.position() if hasattr(event, 'position') else QPointF(event.pos())
+        return (pos - self.offset) / self.scale_factor
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.current_path = QPainterPath()
-            self.current_path.moveTo(event.pos())
+            self.current_path.moveTo(self._map_to_image(event))
             self.update()
 
     def mouseMoveEvent(self, event):
         if self.current_path:
-            self.current_path.lineTo(event.pos())
+            self.current_path.lineTo(self._map_to_image(event))
             self.update()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.current_path:
-            self.current_path.lineTo(event.pos())
+            self.current_path.lineTo(self._map_to_image(event))
             self.strokes.append((self.current_path, self.brush_color, self.brush_size))
             self.current_path = None
             self.update()
@@ -59,6 +82,7 @@ class PaintDialog(QDialog):
     def __init__(self, pixmap, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Paint Cut")
+        self.resize(800, 600)
         self.layout = QVBoxLayout(self)
         
         # Toolbar
@@ -100,7 +124,7 @@ class PaintDialog(QDialog):
         self.update_color_btn()
 
     def choose_color(self):
-        color = QColorDialog.getColor(self.canvas.brush_color, self)
+        color = QColorDialog.getColor(self.canvas.brush_color, self, "Choose Color", QColorDialog.ColorDialogOption.DontUseNativeDialog)
         if color.isValid():
             self.canvas.brush_color = color
             self.update_color_btn()
