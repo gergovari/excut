@@ -424,6 +424,7 @@ class Sidebar(QWidget):
     request_discard = pyqtSignal()
     request_paint = pyqtSignal(object)
     state_changed = pyqtSignal()
+    set_color_mode_requested = pyqtSignal(list, str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -922,5 +923,4 @@ class Sidebar(QWidget):
             self._update_item_style(item.child(i), theme)
 
     def on_set_color_mode_requested(self, items, mode):
-        if self.parent() and hasattr(self.parent(), 'set_mode_for_items'):
-            self.parent().set_mode_for_items(items, mode)
+        self.set_color_mode_requested.emit(items, mode)

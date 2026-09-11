@@ -626,6 +626,7 @@ class MainWindow(QMainWindow):
         self.sidebar.request_discard.connect(self.discard_pending)
         self.sidebar.request_paint.connect(self.handle_paint)
         self.sidebar.state_changed.connect(self.on_sidebar_change)
+        self.sidebar.set_color_mode_requested.connect(self.set_mode_for_items)
         self.sidebar.tree.itemSelectionChanged.connect(self.update_floating_preview)
         
         self.splitter.setSizes([900, 300])
