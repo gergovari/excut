@@ -482,7 +482,6 @@ class MainWindow(QMainWindow):
         self.pages = [] # List of (img_data, filename, page_num)
         self.original_pages = [] # List of unpainted pristine (img_data, filename, page_num)
         self.page_rotations = [] # List of cumulative rotation angles
-        self.page_strokes = {} # dict mapping page_idx -> list of stroke dicts
         self.current_idx = 0
         self.pending_parts = []
         
@@ -520,6 +519,10 @@ class MainWindow(QMainWindow):
         add_files_action.setShortcut(QKeySequence("Ctrl+I"))
         add_files_action.triggered.connect(self.add_input_files)
         file_menu.addAction(add_files_action)
+        
+        replace_pdf_action = QAction("Replace Source PDF(s)...", self)
+        replace_pdf_action.triggered.connect(self.replace_source_pdf)
+        file_menu.addAction(replace_pdf_action)
         
         file_menu.addSeparator()
         
@@ -706,8 +709,6 @@ class MainWindow(QMainWindow):
             # Serialize Pending Parts
             pending_state = []
             for p, meta in self.pending_parts:
-                # meta: {'page_idx', 'rect'}
-                # Need to convert rect
                 pmeta = meta.copy()
                 if 'rect' in pmeta:
                     r = pmeta['rect']
@@ -725,7 +726,6 @@ class MainWindow(QMainWindow):
                 "sticky_mode": self.sidebar.sticky_mode,
                 "pending_parts": pending_state,
                 "page_rotations": self.page_rotations,
-                "page_strokes": self.page_strokes,
                 "undo_stack": self._serialize_stack(self.undo_stack),
                 "redo_stack": self._serialize_stack(self.redo_stack)
             }
@@ -738,32 +738,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
 
     def _serialize_stack(self, stack):
-        # Recursively convert QRects to lists for JSON serialization
         serialized = []
         for snapshot in stack:
             if isinstance(snapshot, list):
                 serialized.append(self._clean_snapshot_for_json(snapshot))
             elif isinstance(snapshot, dict):
-                # Handle rotation dicts
                 if snapshot.get("type") == "rotate":
-                     # data is tuple (img_data, fname, pnum)
-                     # img_data is bytes. json can't serialize bytes directly?
-                     # But save_project handles bytes for main pages?
-                     # No, save_project calls json.dump. Bytes are NOT json serializable.
-                     # We must skip saving rotation undo steps or serialize them properly?
-                     # Rotation steps contain FULL PAGE DATA. This is heavy.
-                     # But current implementation uses pickle-like behavior?
-                     # No, project_io uses json + zip.
-                     # For rotation, we should probably NOT save it to disk in undo stack, 
-                     # or we must encode it.
-                     # Given the complexity, let's filter out 'rotate' actions from saved stack 
-                     # OR properly encode. 
-                     # For now, let's just save sidebar states (lists).
-                     # If we encounter a dict (rotation), we skip it to avoid crash/bloat?
-                     # Or we can try to save it. But bytes must be base64.
                      pass 
                 else: 
-                     # Should be list for sidebar state
                      serialized.append(self._clean_snapshot_for_json([snapshot])[0])
         return serialized
 
@@ -800,37 +782,13 @@ class MainWindow(QMainWindow):
         data = item.data(0, Qt.ItemDataRole.UserRole).copy()
         if "content" in data: del data["content"]
 
-        
-        
-        # Recursively convert QRects in parts
         if "parts" in data:
             new_parts = []
             for p in data["parts"]:
-                # p can be dict or tuple (pixmap, meta_dict)
                 meta = p
                 if isinstance(p, (list, tuple)) and len(p) > 1:
-                    # If it's a tuple, we only care about metadata for snapshotting/saving
-                    # The content is usually ignored or reconstructed
-                    # Wait, for Undo/Redo IN MEMORY, we want to KEEP the Pixmap if possible?
-                    # The undo stack uses these snapshots. 
-                    # If we discard the pixmap here, _restore_sidebar_items must RECONSTRUCT it.
-                    # _restore_sidebar_items calls _reconstruct_pixmap which is expensive but correct.
-                    # AND _reconstruct_pixmap handles both tuples and dicts.
-                    # BUT `_get_sidebar_state` is ALSO used for `save_project` (disk). 
-                    # `_save_to_path` helper CALLS `_get_sidebar_state`.
-                    # So `_item_to_dict` MUST return something JSON-serializable-friendly OR be cleaned later.
-                    # `_save_to_path` calls `save_project`. `save_project` iterates items.
-                    # `save_project` EXPECTS `parts` to be a list of dicts with 'rect'.
-                    # It copies the item and does `np.copy()`. If `np` is a tuple inside `save_project`, it will CRASH there too!
-                    # Checked project_io.py:
-                    # line 69: for p in s_item["parts"]: np = p.copy()
-                    # YES, `save_project` will crash if `parts` contains tuples because tuples don't have .copy().
-                    
-                    # So `_item_to_dict` acts as a sanitizer for the sidebar's "complex" state into "simple" state (dicts).
-                    # Ideally, `_item_to_dict` should STRIP the pixmap from the tuple and return just the metadata dict.
                     meta = p[1]
                 
-                # Check for dict type before copying
                 if isinstance(meta, dict):
                     np = meta.copy()
                     if "rect" in np:
@@ -839,7 +797,6 @@ class MainWindow(QMainWindow):
                             np["rect"] = [r.x(), r.y(), r.width(), r.height()]
                     new_parts.append(np)
                 else:
-                     # Fallback? Should not happen if data is valid
                      pass
 
             data["parts"] = new_parts
@@ -866,19 +823,9 @@ class MainWindow(QMainWindow):
             self.sidebar.remove_pending()
             
             with tempfile.TemporaryDirectory() as temp_dir:
-                # We need to Keep the temp dir alive? 
-                # No, we load images into memory.
                 pass
                 
-            # Actually load_project helper does extraction. 
-            # We need a persistent location for assets if we want to reload them later?
-            # Current implementation loads all into memory.
-            
-            # Create a dedicated extract dir that persists or clean up?
-            # ExCut loads everything to memory (self.pages).
-            
             extract_dir = tempfile.mkdtemp()
-            # Clean up old extract_dir if exists?
             
             input_paths, items, metadata = load_project(path, extract_dir)
             self.input_paths = input_paths
@@ -888,7 +835,6 @@ class MainWindow(QMainWindow):
                 self.theme = metadata["theme"]
                 self.apply_theme(self.theme)
             if "page_size" in metadata:
-                # Handle tuple vs list
                 ps = metadata["page_size"]
                 if isinstance(ps, list): ps = tuple(ps)
                 self.page_size = ps
@@ -903,18 +849,7 @@ class MainWindow(QMainWindow):
             if "page_rotations" in metadata:
                  self.page_rotations = metadata["page_rotations"]
                  
-            self.page_strokes = metadata.get("page_strokes", {})
-            if isinstance(self.page_strokes, list):
-                self.page_strokes = {str(i): s for i, s in enumerate(self.page_strokes)}
-            self.page_strokes = {int(k): v for k, v in self.page_strokes.items()}
-            
             self.load_images_from_paths(self.input_paths)
-            
-            # Apply loaded strokes
-            for p_idx_str, strokes in self.page_strokes.items():
-                p_idx = int(p_idx_str)
-                if 0 <= p_idx < len(self.pages):
-                    self._apply_strokes_to_page(p_idx, strokes)
             self._restore_sidebar_items(items)
             
             if "current_idx" in metadata:
@@ -940,18 +875,12 @@ class MainWindow(QMainWindow):
                     preview = self.combine_parts(parts_visuals)
                     self.sidebar.update_pending_exercise(preview)
             
-            # Restore Undo/Redo Stacks
-            # They are lists of snapshots.
-            # Snapshots are lists of items (dicts).
-            # The items have 'rect' lists that need to be QRects?
-            # actually _restore_sidebar_items handles dict->item creation BUT relies on gui helper for QRect?
-            # No, _restore_sidebar_items iterates a list.
-            # We need to recursively fix QRects in the stacks if we want them to be "ready to restore".
-            
             def fix_snapshot_rects(snapshot):
+                if isinstance(snapshot, dict):
+                    return snapshot.copy()
+                    
                 fixed = []
                 for item in snapshot:
-                    # Shallow copy item
                     c_item = item.copy()
                     if "parts" in c_item:
                          new_parts = []
@@ -1017,45 +946,34 @@ class MainWindow(QMainWindow):
                 
             self.show_current_page()
             
-            self.show_current_page()
-            
             # Restore Pending
             if "pending_parts" in metadata:
                 for pmeta in metadata["pending_parts"]:
-                    # Deserialize rect
                     if "rect" in pmeta and isinstance(pmeta["rect"], list):
                         x, y, w, h = pmeta["rect"]
                         pmeta["rect"] = QRect(x, y, w, h)
                         
-                    # Reconstruct pixmap
-                    parts = [pmeta] # combine takes list
+                    parts = [pmeta]
                     pix = self._reconstruct_pixmap(parts)
                     if pix:
                         self.pending_parts.append((pix, pmeta))
                 
-                # Update visual
                 if self.pending_parts:
                     parts_visuals = [p[0] for p in self.pending_parts]
                     preview = self.combine_parts(parts_visuals)
                     self.sidebar.update_pending_exercise(preview)
             
-            # Init Snapshot
             self.current_state_snapshot = self._get_sidebar_state()
             self.undo_stack = []
             self.redo_stack = []
             self.set_unsaved_changes(False)
-            
-         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
 
     def on_sidebar_change(self):
-        # Capture new state
         new_state = self._get_sidebar_state()
         
-        # Push OLD state to undo
         self.undo_stack.append(self.current_state_snapshot)
         self.current_state_snapshot = new_state
-        self.redo_stack.clear() # Invalidated
+        self.redo_stack.clear()
         self.set_unsaved_changes(True)
 
     def push_canvas_state(self):
@@ -1072,7 +990,6 @@ class MainWindow(QMainWindow):
         if not self.canvas_undo_stack or not self.current_editing_item:
             return False
             
-        # Push current to redo
         data = self.current_editing_item.data(0, Qt.ItemDataRole.UserRole)
         import copy
         current_state = copy.deepcopy(data.get("parts", []))
@@ -1080,11 +997,9 @@ class MainWindow(QMainWindow):
             
         state = self.canvas_undo_stack.pop()
         
-        # Restore logic
         data["parts"] = state
         self.current_editing_item.setData(0, Qt.ItemDataRole.UserRole, data)
         
-        # Refresh Canvas
         self.handle_recrop(self.current_editing_item, push_state=False)
         return True
 
@@ -1092,7 +1007,6 @@ class MainWindow(QMainWindow):
         if not self.canvas_redo_stack or not self.current_editing_item:
              return False
 
-        # Push current to undo
         data = self.current_editing_item.data(0, Qt.ItemDataRole.UserRole)
         import copy
         current_state = copy.deepcopy(data.get("parts", []))
@@ -1107,7 +1021,6 @@ class MainWindow(QMainWindow):
         return True
 
     def undo(self):
-        # Try Canvas Undo first if active
         if self.current_editing_item and self.undo_canvas():
              return
 
@@ -1121,7 +1034,6 @@ class MainWindow(QMainWindow):
              old_data = item['data']
              old_angle = item.get('prev_angle', 0)
              
-             # Save current for Redo
              current_data = self.pages[page_idx]
              self.redo_stack.append({
                  'type': 'rotate', 
@@ -1135,25 +1047,11 @@ class MainWindow(QMainWindow):
              self._rebuild_page_paint(page_idx)
              if self.current_idx == page_idx:
                  self.show_current_page()
-        elif isinstance(item, dict) and item.get('type') == 'paint':
-             import copy
-             self.redo_stack.append({
-                 'type': 'paint',
-                 'page_strokes': copy.deepcopy(self.page_strokes)
-             })
-             self.page_strokes = item['page_strokes']
-             for i in range(len(self.pages)):
-                 self._rebuild_page_paint(i)
-             self._update_items_on_paint(range(len(self.pages)))
-             self.show_current_page()
-             self.update_floating_preview()
         else:
              state_to_restore = item
              
-             # Save CURRENT state to Redo Stack BEFORE restoring old state
              self.redo_stack.append(self.current_state_snapshot)
              
-             # Now Update Current to be the Restored state
              self.current_state_snapshot = state_to_restore
         
              self.sidebar.tree.blockSignals(True)
@@ -1174,10 +1072,8 @@ class MainWindow(QMainWindow):
         if isinstance(item, dict) and item.get('type') == 'rotate':
              page_idx = item['page_idx']
              redo_data = item['data'] 
-             redo_angle = item.get('prev_angle', 0) # Wait, redo should be the NEXT angle?
-             # Item in redo_stack: {'type': 'rotate', 'page_idx', 'data': redone_img, 'prev_angle': redone_angle}
+             redo_angle = item.get('prev_angle', 0)
              
-             # Save current to Undo
              current_data = self.pages[page_idx]
              self.undo_stack.append({
                  'type': 'rotate', 
@@ -1190,21 +1086,9 @@ class MainWindow(QMainWindow):
              self.page_rotations[page_idx] = redo_angle
              if self.current_idx == page_idx:
                  self.show_current_page()
-        elif isinstance(item, dict) and item.get('type') == 'paint':
-             import copy
-             self.undo_stack.append({
-                 'type': 'paint',
-                 'page_strokes': copy.deepcopy(self.page_strokes)
-             })
-             self.page_strokes = item['page_strokes']
-             for i in range(len(self.pages)):
-                 self._rebuild_page_paint(i)
-             self._update_items_on_paint(range(len(self.pages)))
-             self.show_current_page()
-             self.update_floating_preview()
         else:
              state_to_restore = item
-             self.undo_stack.append(self.current_state_snapshot)
+             self.redo_stack.append(self.current_state_snapshot)
              
              self.sidebar.tree.blockSignals(True)
              self.sidebar.tree.clear()
@@ -1216,16 +1100,11 @@ class MainWindow(QMainWindow):
 
     def _restore_sidebar_items(self, items, parent_item=None):
         import copy
-        # Deep copy the items list to prevent mutation of the undo stack
-        # This is critical because we might modify 'rect' types in place below if we aren't careful,
-        # or if previous logic did. But strictly, we should work on a copy.
         items_copy = copy.deepcopy(items)
         
         for idx, data in enumerate(items_copy):
-            # FIX: Ensure nested rects are deserialized if gui.py handles it
             if "parts" in data:
                 for p in data["parts"]:
-                    # Handle both Dict and Tuple cases for safety
                     meta = None
                     if isinstance(p, dict):
                          meta = p
@@ -1256,27 +1135,24 @@ class MainWindow(QMainWindow):
                     self._restore_sidebar_items(data["children"], item)
                     
             elif data["type"] == "image":
-                # Ensure rects in parts are QRects (snapshots store them as lists)
                 parts = data.get("parts", [])
+                strokes = data.get("strokes")
                 clean_parts = []
                 for p in parts:
-                    # Deep copy the part data to ensure independence
                     if isinstance(p, (list, tuple)):
-                         # Reconstruct tuple (pix, meta)
                          pix_ref = p[0]
                          meta_copy = p[1].copy() if len(p) > 1 and isinstance(p[1], dict) else {}
-                         # We don't necessarily need to clone the QPixmap here if reconstruction handles it
                          clean_parts.append((pix_ref, meta_copy))
                     else:
-                         # Full deepcopy for dicts
                          clean_parts.append(copy.deepcopy(p))
                 
-                pix = self._reconstruct_pixmap(clean_parts)
+                pix = self._reconstruct_pixmap(clean_parts, strokes=strokes)
                 if pix:
                     from PyQt6.QtWidgets import QTreeWidgetItem
                     item = QTreeWidgetItem()
-                    # Store completely FRESH data dict
                     item_data = {"type": "image", "content": pix, "title": data.get("title", ""), "parts": clean_parts}
+                    if strokes:
+                        item_data["strokes"] = strokes
                     item.setData(0, Qt.ItemDataRole.UserRole, item_data)
                     
                     if parent_item:
@@ -1301,16 +1177,14 @@ class MainWindow(QMainWindow):
                      
                  self.sidebar._setup_item_widget(item, data["title"], is_title=True)
 
-    def _reconstruct_pixmap(self, parts_data):
+    def _reconstruct_pixmap(self, parts_data, strokes=None):
         if not parts_data: return None
         pixmaps = []
         for i, p in enumerate(parts_data):
-            # Check if it's a tuple (Pixmap, Meta) - from Clone/Manual Copy
             if isinstance(p, (list, tuple)) and len(p) >= 1 and isinstance(p[0], QPixmap):
                 pixmaps.append(p[0])
                 continue
                 
-            # Otherwise assume it's a Metadata Dict - from Load/Undo
             meta = p
             if isinstance(p, (list, tuple)) and len(p) > 1:
                 meta = p[1]
@@ -1327,7 +1201,6 @@ class MainWindow(QMainWindow):
                     elif isinstance(img_data, QImage):
                         page_pix = QPixmap.fromImage(img_data)
                     else:
-                        # Assume bytes
                         page_img = QImage.fromData(img_data)
                         page_pix = QPixmap.fromImage(page_img)
                         
@@ -1338,10 +1211,45 @@ class MainWindow(QMainWindow):
         if not pixmaps:
             return None
             
-        return self.combine_parts(pixmaps)
+        full_pix = self.combine_parts(pixmaps)
+        
+        if strokes:
+            # MUST copy full_pix to avoid baking strokes into cached pixmaps!
+            result_pix = full_pix.copy()
+            layer = QPixmap(result_pix.size())
+            layer.fill(Qt.GlobalColor.transparent)
+            
+            layer_painter = QPainter(layer)
+            layer_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            for stroke_dict in strokes:
+                if stroke_dict.get("eraser"):
+                    layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                else:
+                    layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                
+                pen = QPen(QColor(stroke_dict["color"]), stroke_dict["size"], Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                layer_painter.setPen(pen)
+                
+                path = QPainterPath()
+                pts = stroke_dict["points"]
+                if pts:
+                    path.moveTo(QPointF(pts[0][0], pts[0][1]))
+                    for p in pts[1:]:
+                        path.lineTo(QPointF(p[0], p[1]))
+                layer_painter.drawPath(path)
+                
+            layer_painter.end()
+            
+            painter = QPainter(result_pix)
+            painter.drawPixmap(0, 0, layer)
+            painter.end()
+            
+            return result_pix
+            
+        return full_pix
 
     def load_data(self):
-        # 1. Check if save-path exists and is a project
         if hasattr(self, 'current_project_path') and self.current_project_path and os.path.exists(self.current_project_path) and self.current_project_path.lower().endswith(".excu"):
              self._load_project_file(self.current_project_path)
              return
@@ -1364,12 +1272,10 @@ class MainWindow(QMainWindow):
             for img_data, fname, pnum in generator:
                 self.pages.append((img_data, fname, pnum))
                 self.original_pages.append((img_data, fname, pnum))
-                # Only add 0 if not already populated (e.g. from load_project_file)
                 if len(self.page_rotations) < len(self.pages):
                     self.page_rotations.append(0)
                 QApplication.processEvents()
             
-            # Apply any restored rotations if already set (e.g. from load_project_file)
             restored_rotations = self.page_rotations[:]
             self.page_rotations = [0] * len(self.pages) 
             for i in range(len(self.pages)):
@@ -1378,7 +1284,6 @@ class MainWindow(QMainWindow):
 
             self.show_current_page()
             
-            # Reset Undo History after initial load
             self.undo_stack.clear()
             self.redo_stack.clear()
             self.current_state_snapshot = self._get_sidebar_state()
@@ -1388,8 +1293,116 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load data: {e}")
         progress.close()
 
+    def replace_source_pdf(self):
+        if not self.input_paths:
+            QMessageBox.information(self, "Info", "No input files to replace.")
+            return
+
+        from PyQt6.QtWidgets import QInputDialog
+        file_to_replace, ok = QInputDialog.getItem(
+            self, "Select File to Replace", "Choose the file you want to replace:", self.input_paths, 0, False
+        )
+        if not ok or not file_to_replace:
+            return
+            
+        old_path_idx = self.input_paths.index(file_to_replace)
+
+        new_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select New PDF/Images", "", "Supported Files (*.pdf *.png *.jpg *.jpeg *.bmp)"
+        )
+        if not new_paths:
+            return
+            
+        progress = QProgressDialog("Extracting and Replacing Source Files...", "Cancel", 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+        
+        try:
+            generator = load_input_files(new_paths)
+            new_pages = []
+            for img_data, fname, pnum in generator:
+                new_pages.append((img_data, fname, pnum))
+                QApplication.processEvents()
+                
+            if not new_pages:
+                progress.close()
+                QMessageBox.warning(self, "Error", "No pages were extracted from the selected files.")
+                return
+                
+            progress.close()
+            
+            progress = QProgressDialog("Finalizing Replacement...", "Cancel", 0, 0, self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.show()
+                
+            start_idx = -1
+            end_idx = -1
+            for i, p in enumerate(self.pages):
+                if p[1] == file_to_replace:
+                    if start_idx == -1:
+                        start_idx = i
+                    end_idx = i
+                    
+            if start_idx == -1:
+                start_idx = len(self.pages)
+                end_idx = len(self.pages) - 1
+                
+            old_count = end_idx - start_idx + 1
+            new_count = len(new_pages)
+            delta = new_count - old_count
+            
+            self.pages[start_idx:end_idx+1] = new_pages
+            self.original_pages[start_idx:end_idx+1] = new_pages
+            
+            if start_idx < len(self.page_rotations):
+                rot_start = start_idx
+                rot_end = min(end_idx + 1, len(self.page_rotations))
+                self.page_rotations[rot_start:rot_end] = [0] * new_count
+                
+            if len(self.page_rotations) < len(self.pages):
+                self.page_rotations.extend([0] * (len(self.pages) - len(self.page_rotations)))
+            elif len(self.page_rotations) > len(self.pages):
+                self.page_rotations = self.page_rotations[:len(self.pages)]
+                
+            for item, data in self.sidebar.iter_all_items():
+                if "parts" in data:
+                    updated = False
+                    new_parts = []
+                    for p in data["parts"]:
+                        meta = p[1] if isinstance(p, tuple) else p
+                        c_meta = meta.copy()
+                        pidx = c_meta.get("page_idx", -1)
+                        
+                        if pidx > end_idx:
+                            c_meta["page_idx"] = pidx + delta
+                            updated = True
+                        elif start_idx <= pidx <= end_idx:
+                            updated = True
+                        
+                        new_parts.append(c_meta)
+                            
+                    if updated:
+                        data["parts"] = new_parts
+                        item.setData(0, Qt.ItemDataRole.UserRole, data)
+                            
+            self.input_paths[old_path_idx:old_path_idx+1] = new_paths
+            
+            for i in range(len(self.pages)):
+                self._rebuild_page_paint(i)
+                
+            if self.current_idx >= len(self.pages):
+                self.current_idx = 0
+            self.show_current_page()
+            self.update_floating_preview()
+            
+            self.set_unsaved_changes(True)
+            QMessageBox.information(self, "Success", "Source PDF successfully replaced! Cuts and paints were preserved and shifted appropriately.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to replace files: {e}")
+            
+        progress.close()
+
     def apply_theme(self, theme):
-        # Use Modern QSS
         app = QApplication.instance()
         if app:
             app.setStyleSheet(get_stylesheet(theme))
@@ -1433,7 +1446,6 @@ class MainWindow(QMainWindow):
         if not (0 <= page_idx < len(self.pages)):
             return
 
-        # 1. Save state for Undo
         current_data = self.pages[page_idx]
         if save_undo:
             self.undo_stack.append({
@@ -1444,10 +1456,8 @@ class MainWindow(QMainWindow):
             })
             self.redo_stack.clear()
         
-        # 2. Update cumulative angle
         self.page_rotations[page_idx] = (self.page_rotations[page_idx] + angle) % 360
         
-        # 3. Rotate image
         img, fname, pnum = current_data
         
         qimg = img if not isinstance(img, (bytes, QPixmap)) else (QImage.fromData(img) if isinstance(img, bytes) else img.toImage())
@@ -1455,18 +1465,10 @@ class MainWindow(QMainWindow):
         transform = QTransform().rotate(angle)
         new_qimg = qimg.transformed(transform, Qt.TransformationMode.SmoothTransformation)
         
-        # Convert back to bytes? Or keep as QImage?
-        # Canvas accepts QImage/QPixmap. Keeping as QPixmap is efficient for display.
-        # But if anything else expects bytes (e.g. deepcopying?), it might be tricky.
-        # Let's check if we should convert back to bytes for consistency.
-        # Converting QImage to bytes (PNG) is expensive.
-        # Let's store as QPixmap for performance.
         new_img = QPixmap.fromImage(new_qimg)
         
-        # 4. Update
         self.pages[page_idx] = (new_img, fname, pnum)
         
-        # 5. Synchronize Sidebar Items
         if sync_items:
             self._update_items_on_rotation(page_idx, angle)
         
@@ -1474,20 +1476,7 @@ class MainWindow(QMainWindow):
         self.show_current_page()
 
     def _transform_rect(self, rect, page_w, page_h, angle):
-        """Transforms a QRect based on a 90, 180, or 270 degree rotation."""
         if angle == 0: return rect
-        
-        # For 90 degree clockwise:
-        # new_x = page_h - (old_y + old_h)
-        # new_y = old_x
-        # new_w = old_h
-        # new_h = old_w
-        
-        # For -90 (270) degree:
-        # new_x = old_y
-        # new_y = page_w - (old_x + old_w)
-        # new_w = old_h
-        # new_h = old_w
         
         if angle == 90:
             return QRect(page_h - (rect.y() + rect.height()), rect.x(), rect.height(), rect.width())
@@ -1498,44 +1487,34 @@ class MainWindow(QMainWindow):
         return rect
 
     def _update_items_on_rotation(self, page_idx, angle):
-        """Updates all sidebar items that contain parts from the rotated page."""
-        # We need the page size BEFORE rotation to transform correctly
-        # This is tricky because we already rotated self.pages[page_idx].
-        # But we can get the new size and infer the old one.
         new_img, _, _ = self.pages[page_idx]
         new_w, new_h = new_img.width(), new_img.height()
         
-        # If rotated 90/-90, the old dimensions are swapped
         if abs(angle) % 180 == 90:
             old_w, old_h = new_h, new_w
         else:
             old_w, old_h = new_w, new_h
 
-        # Iterate through all items in sidebar
         for item, data in self.sidebar.iter_all_items():
             if data.get("type") == "image" and "parts" in data:
                 updated = False
                 new_parts = []
                 for p in data["parts"]:
                     if p.get("page_idx") == page_idx:
-                        # Transform Rect
                         p["rect"] = self._transform_rect(p["rect"], old_w, old_h, angle)
                         updated = True
                     new_parts.append(p)
                 
                 if updated:
-                    # Re-reconstruct Pixmap
                     data["parts"] = new_parts
-                    new_pix = self._reconstruct_pixmap(new_parts)
+                    new_pix = self._reconstruct_pixmap(new_parts, strokes=data.get("strokes"))
                     data["content"] = new_pix
                     
-                    # Update Tree Widget
                     item.setData(0, Qt.ItemDataRole.UserRole, data)
                     widget = self.sidebar.tree.itemWidget(item, 0)
                     if widget:
                         widget.set_icon(new_pix)
                     
-                    # Ensure icon in tree is updated too
                     item.setIcon(0, QIcon(new_pix))
             
     def handle_paint(self, item):
@@ -1545,121 +1524,37 @@ class MainWindow(QMainWindow):
         parts = data.get("parts", [])
         if not parts: return
         
-        pixmap = data.get("content")
+        # We must reconstruct the pixmap WITHOUT strokes so the dialog can render them cleanly
+        pixmap = self._reconstruct_pixmap(parts, strokes=None)
         if not pixmap: return
         
+        existing_strokes = data.get("strokes", [])
+        
         from .paint_dialog import PaintDialog
-        dlg = PaintDialog(pixmap, self)
+        dlg = PaintDialog(pixmap, existing_strokes=existing_strokes, parent=self)
         if dlg.exec():
             strokes = dlg.get_strokes()
-            if not strokes: return
-            
             self.apply_strokes_to_item(item, strokes)
             
     def apply_strokes_to_item(self, item, strokes):
         data = item.data(0, Qt.ItemDataRole.UserRole)
-        parts = data.get("parts", [])
+        if not data: return
         
-        import copy
-        current_paint_state = {
-            'type': 'paint',
-            'page_strokes': copy.deepcopy(self.page_strokes)
-        }
-        self.undo_stack.append(current_paint_state)
+        self.undo_stack.append(self.current_state_snapshot)
+        
+        data["strokes"] = strokes
+        
+        new_pix = self._reconstruct_pixmap(data.get("parts", []), strokes=strokes)
+        data["content"] = new_pix
+        item.setData(0, Qt.ItemDataRole.UserRole, data)
+        widget = self.sidebar.tree.itemWidget(item, 0)
+        if widget:
+            widget.set_icon(new_pix)
+            
+        self.current_state_snapshot = self._get_sidebar_state()
         self.redo_stack.clear()
-        
-        modified_pages = set()
-        y_offset = 0
-        
-        for p in parts:
-            meta = p[1] if isinstance(p, tuple) else p
-            page_idx = meta.get("page_idx")
-            rect = meta.get("rect")
-            if isinstance(rect, list):
-                rect = QRect(*rect)
-            
-            part_height = rect.height()
-            
-            if 0 <= page_idx < len(self.pages):
-                img_data, fname, pnum = self.pages[page_idx]
-                
-                if isinstance(img_data, QImage):
-                    full_pix = QPixmap.fromImage(img_data)
-                elif isinstance(img_data, QPixmap):
-                    full_pix = QPixmap(img_data)
-                else:
-                    img = QImage.fromData(img_data)
-                    full_pix = QPixmap.fromImage(img)
-                    
-                translated_strokes = []
-                for stroke_dict in strokes:
-                    new_pts = []
-                    for pt in stroke_dict["points"]:
-                        new_x = pt[0] + rect.left()
-                        new_y = pt[1] + rect.top() - y_offset
-                        new_pts.append([new_x, new_y])
-                        
-                    translated_strokes.append({
-                        "points": new_pts,
-                        "color": stroke_dict["color"],
-                        "size": stroke_dict["size"],
-                        "clip_rect": [rect.left(), rect.top(), rect.width(), rect.height()]
-                    })
-                    
-                painter = QPainter(full_pix)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                painter.setClipRect(rect)
-                
-                for stroke_dict in translated_strokes:
-                    color = QColor(stroke_dict["color"])
-                    size = stroke_dict["size"]
-                    
-                    path = QPainterPath()
-                    pts = stroke_dict["points"]
-                    if pts:
-                        path.moveTo(QPointF(pts[0][0], pts[0][1]))
-                        for pt in pts[1:]:
-                            path.lineTo(QPointF(pt[0], pt[1]))
-                            
-                    pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-                    painter.setPen(pen)
-                    painter.drawPath(path)
-                    
-                painter.end()
-                
-                self.pages[page_idx] = (full_pix, fname, pnum)
-                modified_pages.add(page_idx)
-                
-                if page_idx not in self.page_strokes:
-                    self.page_strokes[page_idx] = []
-                self.page_strokes[page_idx].extend(translated_strokes)
-                self._rebuild_page_paint(page_idx)
-            
-            y_offset += part_height
-            
-        if modified_pages:
-            self._update_items_on_paint(modified_pages)
-            self.set_unsaved_changes(True)
-            self.show_current_page() # refresh canvas
-            self.update_floating_preview()
-
-    def _update_items_on_paint(self, page_indices):
-        for item, data in self.sidebar.iter_all_items():
-            if data.get("type") == "image" and "parts" in data:
-                updated = False
-                for p in data["parts"]:
-                    meta = p[1] if isinstance(p, tuple) else p
-                    if meta.get("page_idx") in page_indices:
-                        updated = True
-                        break
-                
-                if updated:
-                    new_pix = self._reconstruct_pixmap(data["parts"])
-                    data["content"] = new_pix
-                    item.setData(0, Qt.ItemDataRole.UserRole, data)
-                    widget = self.sidebar.tree.itemWidget(item, 0)
-                    if widget:
-                        widget.set_icon(new_pix)
+        self.set_unsaved_changes(True)
+        self.update_floating_preview()
 
     def _rebuild_page_paint(self, page_idx):
         if page_idx < 0 or page_idx >= len(self.pages) or page_idx >= len(self.original_pages):
@@ -1680,50 +1575,7 @@ class MainWindow(QMainWindow):
             transform = QTransform().rotate(angle)
             full_pix = full_pix.transformed(transform, Qt.TransformationMode.SmoothTransformation)
             
-        strokes = self.page_strokes.get(page_idx, [])
-        if strokes:
-            stroke_layer = QPixmap(full_pix.size())
-            stroke_layer.fill(Qt.GlobalColor.transparent)
-            layer_painter = QPainter(stroke_layer)
-            layer_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            
-            for stroke_dict in strokes:
-                color = QColor(stroke_dict["color"])
-                size = stroke_dict["size"]
-                
-                clip = stroke_dict.get("clip_rect")
-                if clip:
-                    layer_painter.setClipRect(QRect(*clip))
-                else:
-                    layer_painter.setClipping(False)
-                    
-                if stroke_dict.get("eraser"):
-                    layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-                else:
-                    layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-                
-                path = QPainterPath()
-                pts = stroke_dict["points"]
-                if pts:
-                    path.moveTo(QPointF(pts[0][0], pts[0][1]))
-                    for pt in pts[1:]:
-                        path.lineTo(QPointF(pt[0], pt[1]))
-                        
-                pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-                layer_painter.setPen(pen)
-                layer_painter.drawPath(path)
-                
-            layer_painter.end()
-            
-            main_painter = QPainter(full_pix)
-            main_painter.drawPixmap(0, 0, stroke_layer)
-            main_painter.end()
-            
         self.pages[page_idx] = (full_pix, fname, pnum)
-
-    def _apply_strokes_to_page(self, page_idx, strokes):
-        # Delegate to _rebuild_page_paint
-        self._rebuild_page_paint(page_idx)
 
 
     def cut_selection(self, is_partial):

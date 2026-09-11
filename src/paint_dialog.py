@@ -20,6 +20,22 @@ class PaintCanvas(QWidget):
         self.is_eraser = False
         self.scale_factor = 1.0
         self.offset = QPointF(0, 0)
+        
+    def load_strokes(self, existing_strokes):
+        if not existing_strokes:
+            return
+            
+        for s in existing_strokes:
+            path = QPainterPath()
+            pts = s.get("points", [])
+            if pts:
+                path.moveTo(QPointF(pts[0][0], pts[0][1]))
+                for p in pts[1:]:
+                    path.lineTo(QPointF(p[0], p[1]))
+            
+            self.strokes.append((path, s))
+            
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -118,7 +134,7 @@ class PaintCanvas(QWidget):
             self.update()
 
 class PaintDialog(QDialog):
-    def __init__(self, pixmap, parent=None):
+    def __init__(self, pixmap, existing_strokes=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Paint Cut")
         self.resize(800, 600)
@@ -158,6 +174,8 @@ class PaintDialog(QDialog):
         
         # Canvas
         self.canvas = PaintCanvas(pixmap)
+        if existing_strokes:
+            self.canvas.load_strokes(existing_strokes)
         self.layout.addWidget(self.canvas)
         
         # Buttons
