@@ -1204,6 +1204,8 @@ class MainWindow(QMainWindow):
                         item_data["strokes"] = strokes
                     if "color_mode" in data:
                         item_data["color_mode"] = data["color_mode"]
+                    if "show_title" in data:
+                        item_data["show_title"] = data["show_title"]
                     item.setData(0, Qt.ItemDataRole.UserRole, item_data)
                     
                     if parent_item:
