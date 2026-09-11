@@ -174,9 +174,13 @@ class PaintDialog(QDialog):
         
         # Canvas
         self.canvas = PaintCanvas(pixmap)
+        if hasattr(self.parent(), 'last_paint_color'):
+            self.canvas.brush_color = QColor(self.parent().last_paint_color)
+            self.canvas.brush_size = getattr(self.parent(), 'last_paint_size', 5)
         if existing_strokes:
             self.canvas.load_strokes(existing_strokes)
         self.layout.addWidget(self.canvas)
+        self.size_slider.setValue(self.canvas.brush_size)
         
         # Buttons
         btn_layout = QHBoxLayout()
@@ -195,10 +199,14 @@ class PaintDialog(QDialog):
         color = QColorDialog.getColor(self.canvas.brush_color, self, "Choose Color", QColorDialog.ColorDialogOption.DontUseNativeDialog)
         if color.isValid():
             self.canvas.brush_color = color
+            if hasattr(self.parent(), 'last_paint_color'):
+                self.parent().last_paint_color = color.name()
             self.update_color_btn()
 
     def size_changed(self, value):
         self.canvas.brush_size = value
+        if hasattr(self.parent(), 'last_paint_size'):
+            self.parent().last_paint_size = value
 
     def update_color_btn(self):
         color = self.canvas.brush_color.name()

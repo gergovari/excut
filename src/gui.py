@@ -397,7 +397,7 @@ class FloatingPreviewWindow(QWidget):
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.canvas_container.addWidget(self.empty_label)
 
-    def set_pixmap(self, pixmap, item=None):
+    def set_pixmap(self, pixmap, existing_strokes=None, item=None):
         self.current_item = item
         if self.canvas:
             self.canvas_container.removeWidget(self.canvas)
@@ -407,8 +407,14 @@ class FloatingPreviewWindow(QWidget):
         if pixmap:
             self.empty_label.hide()
             self.canvas = PaintCanvas(pixmap)
+            if hasattr(self.main_window, 'last_paint_color'):
+                self.canvas.brush_color = QColor(self.main_window.last_paint_color)
+                self.canvas.brush_size = getattr(self.main_window, 'last_paint_size', 5)
+            if existing_strokes:
+                self.canvas.load_strokes(existing_strokes)
             self.canvas_container.addWidget(self.canvas)
             self.update_color_btn()
+            self.size_slider.setValue(self.canvas.brush_size)
         else:
             self.empty_label.show()
 
@@ -417,11 +423,13 @@ class FloatingPreviewWindow(QWidget):
         color = QColorDialog.getColor(self.canvas.brush_color, self, "Choose Color", QColorDialog.ColorDialogOption.DontUseNativeDialog)
         if color.isValid():
             self.canvas.brush_color = color
+            self.main_window.last_paint_color = color.name()
             self.update_color_btn()
 
     def size_changed(self, value):
         if self.canvas:
             self.canvas.brush_size = value
+            self.main_window.last_paint_size = value
 
     def update_color_btn(self):
         if not self.canvas: return
@@ -443,11 +451,8 @@ class FloatingPreviewWindow(QWidget):
     def save_strokes(self):
         if not self.canvas or not self.current_item: return
         strokes = [s[1] for s in self.canvas.strokes]
-        if not strokes: return
         
         self.main_window.apply_strokes_to_item(self.current_item, strokes)
-        self.canvas.strokes = []
-        self.canvas.redo_stack = []
 
 class MainWindow(QMainWindow):
     def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4", default_save_path=None):
@@ -484,6 +489,8 @@ class MainWindow(QMainWindow):
         self.page_rotations = [] # List of cumulative rotation angles
         self.current_idx = 0
         self.pending_parts = []
+        self.last_paint_color = "#ff0000"
+        self.last_paint_size = 5
         
         # Undo/Redo State
         self.undo_stack = []
@@ -638,9 +645,13 @@ class MainWindow(QMainWindow):
             if items:
                 item = items[0]
                 data = item.data(0, Qt.ItemDataRole.UserRole)
-                if data and data.get("type") == "image" and data.get("content"):
-                    self.floating_preview_window.set_pixmap(data.get("content"), item)
-                    return
+                if data and data.get("type") == "image":
+                    parts = data.get("parts", [])
+                    pixmap = self._reconstruct_pixmap(parts, strokes=None)
+                    existing_strokes = data.get("strokes", [])
+                    if pixmap:
+                        self.floating_preview_window.set_pixmap(pixmap, existing_strokes=existing_strokes, item=item)
+                        return
             self.floating_preview_window.set_pixmap(None, None)
 
     def discard_pending(self):
@@ -726,6 +737,8 @@ class MainWindow(QMainWindow):
                 "sticky_mode": self.sidebar.sticky_mode,
                 "pending_parts": pending_state,
                 "page_rotations": self.page_rotations,
+                "last_paint_color": getattr(self, 'last_paint_color', "#ff0000"),
+                "last_paint_size": getattr(self, 'last_paint_size', 5),
                 "undo_stack": self._serialize_stack(self.undo_stack),
                 "redo_stack": self._serialize_stack(self.redo_stack)
             }
@@ -848,6 +861,10 @@ class MainWindow(QMainWindow):
                  self.bg_pattern = metadata["bg_pattern"]
             if "page_rotations" in metadata:
                  self.page_rotations = metadata["page_rotations"]
+            if "last_paint_color" in metadata:
+                 self.last_paint_color = metadata["last_paint_color"]
+            if "last_paint_size" in metadata:
+                 self.last_paint_size = metadata["last_paint_size"]
                  
             self.load_images_from_paths(self.input_paths)
             self._restore_sidebar_items(items)
@@ -934,6 +951,10 @@ class MainWindow(QMainWindow):
                  self.bg_image = metadata["bg_image"]
             if "bg_pattern" in metadata:
                  self.bg_pattern = metadata["bg_pattern"]
+            if "last_paint_color" in metadata:
+                 self.last_paint_color = metadata["last_paint_color"]
+            if "last_paint_size" in metadata:
+                 self.last_paint_size = metadata["last_paint_size"]
                  
             self.load_images_from_paths(self.input_paths)
             self._restore_sidebar_items(items)
@@ -1059,6 +1080,7 @@ class MainWindow(QMainWindow):
              self._restore_sidebar_items(state_to_restore)
              self.sidebar.tree.blockSignals(False)
              self.sidebar.restore_widgets()
+             self.update_floating_preview()
 
     def redo(self):
         if self.current_editing_item and self.redo_canvas():
@@ -1095,6 +1117,7 @@ class MainWindow(QMainWindow):
              self._restore_sidebar_items(state_to_restore)
              self.sidebar.tree.blockSignals(False)
              self.sidebar.restore_widgets()
+             self.update_floating_preview()
              
              self.current_state_snapshot = state_to_restore
 
@@ -1550,6 +1573,8 @@ class MainWindow(QMainWindow):
         widget = self.sidebar.tree.itemWidget(item, 0)
         if widget:
             widget.set_icon(new_pix)
+            
+        item.setIcon(0, QIcon(new_pix))
             
         self.current_state_snapshot = self._get_sidebar_state()
         self.redo_stack.clear()
