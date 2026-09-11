@@ -370,6 +370,11 @@ class FloatingPreviewWindow(QWidget):
         self.eraser_btn.clicked.connect(self.toggle_eraser)
         self.toolbar.addWidget(self.eraser_btn)
         
+        self.grayscale_btn = QPushButton("Grayscale")
+        self.grayscale_btn.setCheckable(True)
+        self.grayscale_btn.clicked.connect(self.toggle_grayscale)
+        self.toolbar.addWidget(self.grayscale_btn)
+        
         self.undo_btn = QPushButton("Undo")
         self.undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_btn.clicked.connect(self.undo)
@@ -407,6 +412,12 @@ class FloatingPreviewWindow(QWidget):
         if pixmap:
             self.empty_label.hide()
             self.canvas = PaintCanvas(pixmap)
+            
+            if item:
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                self.canvas.is_grayscale = data.get("grayscale", False)
+                self.grayscale_btn.setChecked(self.canvas.is_grayscale)
+                
             if hasattr(self.main_window, 'last_paint_color'):
                 self.canvas.brush_color = QColor(self.main_window.last_paint_color)
                 self.canvas.brush_size = getattr(self.main_window, 'last_paint_size', 5)
@@ -440,6 +451,11 @@ class FloatingPreviewWindow(QWidget):
         if self.canvas:
             self.canvas.is_eraser = checked
 
+    def toggle_grayscale(self, checked):
+        if self.canvas:
+            self.canvas.is_grayscale = checked
+            self.canvas.update()
+
     def undo(self):
         if self.canvas:
             self.canvas.undo()
@@ -452,7 +468,7 @@ class FloatingPreviewWindow(QWidget):
         if not self.canvas or not self.current_item: return
         strokes = [s[1] for s in self.canvas.strokes]
         
-        self.main_window.apply_strokes_to_item(self.current_item, strokes)
+        self.main_window.apply_strokes_to_item(self.current_item, strokes, self.canvas.is_grayscale)
 
 class MainWindow(QMainWindow):
     def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4", default_save_path=None):
@@ -1200,7 +1216,7 @@ class MainWindow(QMainWindow):
                      
                  self.sidebar._setup_item_widget(item, data["title"], is_title=True)
 
-    def _reconstruct_pixmap(self, parts_data, strokes=None):
+    def _reconstruct_pixmap(self, parts_data, strokes=None, grayscale=False):
         if not parts_data: return None
         pixmaps = []
         for i, p in enumerate(parts_data):
@@ -1235,6 +1251,10 @@ class MainWindow(QMainWindow):
             return None
             
         full_pix = self.combine_parts(pixmaps)
+        
+        if grayscale:
+            img = full_pix.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+            full_pix = QPixmap.fromImage(img)
         
         if strokes:
             # MUST copy full_pix to avoid baking strokes into cached pixmaps!
@@ -1552,22 +1572,28 @@ class MainWindow(QMainWindow):
         if not pixmap: return
         
         existing_strokes = data.get("strokes", [])
+        is_grayscale = data.get("grayscale", False)
         
         from .paint_dialog import PaintDialog
-        dlg = PaintDialog(pixmap, existing_strokes=existing_strokes, parent=self)
+        dlg = PaintDialog(pixmap, existing_strokes=existing_strokes, is_grayscale=is_grayscale, parent=self)
         if dlg.exec():
             strokes = dlg.get_strokes()
-            self.apply_strokes_to_item(item, strokes)
+            grayscale = dlg.get_grayscale()
+            self.apply_strokes_to_item(item, strokes, grayscale)
             
-    def apply_strokes_to_item(self, item, strokes):
+    def apply_strokes_to_item(self, item, strokes, grayscale=None):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data: return
         
         self.undo_stack.append(self.current_state_snapshot)
         
         data["strokes"] = strokes
+        if grayscale is not None:
+            data["grayscale"] = grayscale
+        else:
+            grayscale = data.get("grayscale", False)
         
-        new_pix = self._reconstruct_pixmap(data.get("parts", []), strokes=strokes)
+        new_pix = self._reconstruct_pixmap(data.get("parts", []), strokes=strokes, grayscale=grayscale)
         data["content"] = new_pix
         item.setData(0, Qt.ItemDataRole.UserRole, data)
         widget = self.sidebar.tree.itemWidget(item, 0)
