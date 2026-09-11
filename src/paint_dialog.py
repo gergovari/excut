@@ -17,6 +17,7 @@ class PaintCanvas(QWidget):
         
         self.brush_color = QColor(255, 0, 0)
         self.brush_size = 5
+        self.is_eraser = False
         self.scale_factor = 1.0
         self.offset = QPointF(0, 0)
 
@@ -44,11 +45,20 @@ class PaintCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         for path, stroke_dict in self.strokes:
+            if stroke_dict.get("eraser"):
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            else:
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                
             pen = QPen(QColor(stroke_dict["color"]), stroke_dict["size"], Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             painter.drawPath(path)
             
         if self.current_path:
+            if self.is_eraser:
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            else:
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
             pen = QPen(self.brush_color, self.brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             painter.drawPath(self.current_path)
@@ -82,7 +92,8 @@ class PaintCanvas(QWidget):
             stroke_dict = {
                 "points": self.current_points,
                 "color": self.brush_color.name(),
-                "size": self.brush_size
+                "size": self.brush_size,
+                "eraser": self.is_eraser
             }
             self.strokes.append((self.current_path, stroke_dict))
             self.current_path = None
@@ -112,6 +123,11 @@ class PaintDialog(QDialog):
         self.color_btn = QPushButton("Color")
         self.color_btn.clicked.connect(self.choose_color)
         toolbar.addWidget(self.color_btn)
+        
+        self.eraser_btn = QPushButton("Eraser")
+        self.eraser_btn.setCheckable(True)
+        self.eraser_btn.clicked.connect(self.toggle_eraser)
+        toolbar.addWidget(self.eraser_btn)
         
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(1, 50)
@@ -162,6 +178,9 @@ class PaintDialog(QDialog):
     def update_color_btn(self):
         color = self.canvas.brush_color.name()
         self.color_btn.setStyleSheet(f"background-color: {color}; color: {'white' if self.canvas.brush_color.lightness() < 128 else 'black'};")
+
+    def toggle_eraser(self, checked):
+        self.canvas.is_eraser = checked
 
     def undo(self):
         self.canvas.undo()

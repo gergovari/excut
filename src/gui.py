@@ -3,8 +3,8 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QPushButton, QApplication, QLabel, QFileDialog, QMenuBar, QMenu,
     QFormLayout, QLineEdit, QComboBox, QScrollArea, QSlider, QColorDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QRect, QRectF
-from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage, QPen, QBrush, QIcon
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF
+from PyQt6.QtGui import QAction, QPixmap, QPainter, QShortcut, QKeySequence, QColor, QPalette, QTransform, QImage, QPen, QBrush, QIcon, QPainterPath
 from .canvas import ImageCanvas
 from .sidebar import Sidebar
 from .pdf_utils import load_input_files, generate_output_pdf
@@ -365,6 +365,11 @@ class FloatingPreviewWindow(QWidget):
         self.toolbar.addWidget(QLabel("Size:"))
         self.toolbar.addWidget(self.size_slider)
         
+        self.eraser_btn = QPushButton("Eraser")
+        self.eraser_btn.setCheckable(True)
+        self.eraser_btn.clicked.connect(self.toggle_eraser)
+        self.toolbar.addWidget(self.eraser_btn)
+        
         self.undo_btn = QPushButton("Undo")
         self.undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_btn.clicked.connect(self.undo)
@@ -423,6 +428,10 @@ class FloatingPreviewWindow(QWidget):
         color = self.canvas.brush_color.name()
         self.color_btn.setStyleSheet(f"background-color: {color}; color: {'white' if self.canvas.brush_color.lightness() < 128 else 'black'};")
 
+    def toggle_eraser(self, checked):
+        if self.canvas:
+            self.canvas.is_eraser = checked
+
     def undo(self):
         if self.canvas:
             self.canvas.undo()
@@ -471,6 +480,7 @@ class MainWindow(QMainWindow):
         self._init_ui()
         
         self.pages = [] # List of (img_data, filename, page_num)
+        self.original_pages = [] # List of unpainted pristine (img_data, filename, page_num)
         self.page_rotations = [] # List of cumulative rotation angles
         self.page_strokes = {} # dict mapping page_idx -> list of stroke dicts
         self.current_idx = 0
@@ -850,6 +860,7 @@ class MainWindow(QMainWindow):
     def _load_project_file(self, path):
          try:
             self.pages = []
+            self.original_pages = []
             self.input_paths = []
             self.sidebar.tree.clear()
             self.sidebar.remove_pending()
@@ -1121,8 +1132,21 @@ class MainWindow(QMainWindow):
              
              self.pages[page_idx] = old_data
              self.page_rotations[page_idx] = old_angle
+             self._rebuild_page_paint(page_idx)
              if self.current_idx == page_idx:
                  self.show_current_page()
+        elif isinstance(item, dict) and item.get('type') == 'paint':
+             import copy
+             self.redo_stack.append({
+                 'type': 'paint',
+                 'page_strokes': copy.deepcopy(self.page_strokes)
+             })
+             self.page_strokes = item['page_strokes']
+             for i in range(len(self.pages)):
+                 self._rebuild_page_paint(i)
+             self._update_items_on_paint(range(len(self.pages)))
+             self.show_current_page()
+             self.update_floating_preview()
         else:
              state_to_restore = item
              
@@ -1166,6 +1190,18 @@ class MainWindow(QMainWindow):
              self.page_rotations[page_idx] = redo_angle
              if self.current_idx == page_idx:
                  self.show_current_page()
+        elif isinstance(item, dict) and item.get('type') == 'paint':
+             import copy
+             self.undo_stack.append({
+                 'type': 'paint',
+                 'page_strokes': copy.deepcopy(self.page_strokes)
+             })
+             self.page_strokes = item['page_strokes']
+             for i in range(len(self.pages)):
+                 self._rebuild_page_paint(i)
+             self._update_items_on_paint(range(len(self.pages)))
+             self.show_current_page()
+             self.update_floating_preview()
         else:
              state_to_restore = item
              self.undo_stack.append(self.current_state_snapshot)
@@ -1327,6 +1363,7 @@ class MainWindow(QMainWindow):
             generator = load_input_files(paths)
             for img_data, fname, pnum in generator:
                 self.pages.append((img_data, fname, pnum))
+                self.original_pages.append((img_data, fname, pnum))
                 # Only add 0 if not already populated (e.g. from load_project_file)
                 if len(self.page_rotations) < len(self.pages):
                     self.page_rotations.append(0)
@@ -1523,6 +1560,14 @@ class MainWindow(QMainWindow):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         parts = data.get("parts", [])
         
+        import copy
+        current_paint_state = {
+            'type': 'paint',
+            'page_strokes': copy.deepcopy(self.page_strokes)
+        }
+        self.undo_stack.append(current_paint_state)
+        self.redo_stack.clear()
+        
         modified_pages = set()
         y_offset = 0
         
@@ -1546,12 +1591,26 @@ class MainWindow(QMainWindow):
                     img = QImage.fromData(img_data)
                     full_pix = QPixmap.fromImage(img)
                     
+                translated_strokes = []
+                for stroke_dict in strokes:
+                    new_pts = []
+                    for pt in stroke_dict["points"]:
+                        new_x = pt[0] + rect.left()
+                        new_y = pt[1] + rect.top() - y_offset
+                        new_pts.append([new_x, new_y])
+                        
+                    translated_strokes.append({
+                        "points": new_pts,
+                        "color": stroke_dict["color"],
+                        "size": stroke_dict["size"],
+                        "clip_rect": [rect.left(), rect.top(), rect.width(), rect.height()]
+                    })
+                    
                 painter = QPainter(full_pix)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.setClipRect(rect)
-                painter.translate(rect.left(), rect.top() - y_offset)
                 
-                for stroke_dict in strokes:
+                for stroke_dict in translated_strokes:
                     color = QColor(stroke_dict["color"])
                     size = stroke_dict["size"]
                     
@@ -1573,7 +1632,8 @@ class MainWindow(QMainWindow):
                 
                 if page_idx not in self.page_strokes:
                     self.page_strokes[page_idx] = []
-                self.page_strokes[page_idx].extend(strokes)
+                self.page_strokes[page_idx].extend(translated_strokes)
+                self._rebuild_page_paint(page_idx)
             
             y_offset += part_height
             
@@ -1601,11 +1661,11 @@ class MainWindow(QMainWindow):
                     if widget:
                         widget.set_icon(new_pix)
 
-    def _apply_strokes_to_page(self, page_idx, strokes):
-        if not strokes or page_idx < 0 or page_idx >= len(self.pages):
+    def _rebuild_page_paint(self, page_idx):
+        if page_idx < 0 or page_idx >= len(self.pages) or page_idx >= len(self.original_pages):
             return
             
-        img_data, fname, pnum = self.pages[page_idx]
+        img_data, fname, pnum = self.original_pages[page_idx]
         
         if isinstance(img_data, QImage):
             full_pix = QPixmap.fromImage(img_data)
@@ -1615,26 +1675,44 @@ class MainWindow(QMainWindow):
             img = QImage.fromData(img_data)
             full_pix = QPixmap.fromImage(img)
             
-        painter = QPainter(full_pix)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        for stroke_dict in strokes:
-            color = QColor(stroke_dict["color"])
-            size = stroke_dict["size"]
+        angle = self.page_rotations[page_idx] if page_idx < len(self.page_rotations) else 0
+        if angle != 0:
+            transform = QTransform().rotate(angle)
+            full_pix = full_pix.transformed(transform, Qt.TransformationMode.SmoothTransformation)
             
-            path = QPainterPath()
-            pts = stroke_dict["points"]
-            if pts:
-                path.moveTo(QPointF(pts[0][0], pts[0][1]))
-                for pt in pts[1:]:
-                    path.lineTo(QPointF(pt[0], pt[1]))
-                    
-            pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.drawPath(path)
+        strokes = self.page_strokes.get(page_idx, [])
+        if strokes:
+            painter = QPainter(full_pix)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
-        painter.end()
+            for stroke_dict in strokes:
+                color = QColor(stroke_dict["color"])
+                size = stroke_dict["size"]
+                
+                clip = stroke_dict.get("clip_rect")
+                if clip:
+                    painter.setClipRect(QRect(*clip))
+                else:
+                    painter.setClipping(False)
+                
+                path = QPainterPath()
+                pts = stroke_dict["points"]
+                if pts:
+                    path.moveTo(QPointF(pts[0][0], pts[0][1]))
+                    for pt in pts[1:]:
+                        path.lineTo(QPointF(pt[0], pt[1]))
+                        
+                pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.drawPath(path)
+                
+            painter.end()
+            
         self.pages[page_idx] = (full_pix, fname, pnum)
+
+    def _apply_strokes_to_page(self, page_idx, strokes):
+        # Delegate to _rebuild_page_paint
+        self._rebuild_page_paint(page_idx)
 
 
     def cut_selection(self, is_partial):
