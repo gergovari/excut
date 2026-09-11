@@ -42,26 +42,33 @@ class PaintCanvas(QWidget):
         
         painter.drawPixmap(0, 0, self.base_pixmap)
         
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        stroke_layer = QPixmap(self.base_pixmap.size())
+        stroke_layer.fill(Qt.GlobalColor.transparent)
+        
+        layer_painter = QPainter(stroke_layer)
+        layer_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         for path, stroke_dict in self.strokes:
             if stroke_dict.get("eraser"):
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
             else:
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
                 
             pen = QPen(QColor(stroke_dict["color"]), stroke_dict["size"], Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.drawPath(path)
+            layer_painter.setPen(pen)
+            layer_painter.drawPath(path)
             
         if self.current_path:
             if self.is_eraser:
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
             else:
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
             pen = QPen(self.brush_color, self.brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.drawPath(self.current_path)
+            layer_painter.setPen(pen)
+            layer_painter.drawPath(self.current_path)
+            
+        layer_painter.end()
+        painter.drawPixmap(0, 0, stroke_layer)
 
     def _map_to_image(self, event):
         pos = event.position() if hasattr(event, 'position') else QPointF(event.pos())

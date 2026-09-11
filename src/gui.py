@@ -1682,8 +1682,10 @@ class MainWindow(QMainWindow):
             
         strokes = self.page_strokes.get(page_idx, [])
         if strokes:
-            painter = QPainter(full_pix)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            stroke_layer = QPixmap(full_pix.size())
+            stroke_layer.fill(Qt.GlobalColor.transparent)
+            layer_painter = QPainter(stroke_layer)
+            layer_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
             for stroke_dict in strokes:
                 color = QColor(stroke_dict["color"])
@@ -1691,9 +1693,14 @@ class MainWindow(QMainWindow):
                 
                 clip = stroke_dict.get("clip_rect")
                 if clip:
-                    painter.setClipRect(QRect(*clip))
+                    layer_painter.setClipRect(QRect(*clip))
                 else:
-                    painter.setClipping(False)
+                    layer_painter.setClipping(False)
+                    
+                if stroke_dict.get("eraser"):
+                    layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                else:
+                    layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
                 
                 path = QPainterPath()
                 pts = stroke_dict["points"]
@@ -1703,10 +1710,14 @@ class MainWindow(QMainWindow):
                         path.lineTo(QPointF(pt[0], pt[1]))
                         
                 pen = QPen(color, size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-                painter.setPen(pen)
-                painter.drawPath(path)
+                layer_painter.setPen(pen)
+                layer_painter.drawPath(path)
                 
-            painter.end()
+            layer_painter.end()
+            
+            main_painter = QPainter(full_pix)
+            main_painter.drawPixmap(0, 0, stroke_layer)
+            main_painter.end()
             
         self.pages[page_idx] = (full_pix, fname, pnum)
 
