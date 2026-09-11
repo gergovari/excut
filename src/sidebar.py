@@ -279,7 +279,7 @@ class SidebarItemWidget(QWidget):
 
 class SidebarTree(QTreeWidget):
     widgets_refreshed = pyqtSignal()
-    toggle_grayscale_requested = pyqtSignal(list)
+    set_color_mode_requested = pyqtSignal(list, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -343,15 +343,22 @@ class SidebarTree(QTreeWidget):
             if item not in selected:
                 selected = [item]
                 
-            toggle_grayscale = menu.addAction("Toggle Grayscale")
+            color_mode_menu = menu.addMenu("Color Mode")
+            set_color = color_mode_menu.addAction("Original Color")
+            set_grayscale = color_mode_menu.addAction("Grayscale")
+            set_bw = color_mode_menu.addAction("Black & White")
             
             action = menu.exec(event.globalPos())
             if action == move_up:
                 self.move_item_up(item)
             elif action == move_down:
                 self.move_item_down(item)
-            elif action == toggle_grayscale:
-                self.toggle_grayscale_requested.emit(selected)
+            elif action == set_color:
+                self.set_color_mode_requested.emit(selected, "color")
+            elif action == set_grayscale:
+                self.set_color_mode_requested.emit(selected, "grayscale")
+            elif action == set_bw:
+                self.set_color_mode_requested.emit(selected, "bw")
         else:
             super().contextMenuEvent(event)
 
@@ -444,7 +451,7 @@ class Sidebar(QWidget):
         self.tree.itemDoubleClicked.connect(self.on_item_double_click)
         self.tree.widgets_refreshed.connect(self.restore_widgets)
         self.tree.widgets_refreshed.connect(self.state_changed.emit)
-        self.tree.toggle_grayscale_requested.connect(self.on_toggle_grayscale_requested)
+        self.tree.set_color_mode_requested.connect(self.on_set_color_mode_requested)
         self.state_changed.connect(self.evaluate_dynamic_titles)
         self.layout.addWidget(self.tree)
         
@@ -914,6 +921,6 @@ class Sidebar(QWidget):
         for i in range(item.childCount()):
             self._update_item_style(item.child(i), theme)
 
-    def on_toggle_grayscale_requested(self, items):
-        if self.parent() and hasattr(self.parent(), 'toggle_grayscale_for_items'):
-            self.parent().toggle_grayscale_for_items(items)
+    def on_set_color_mode_requested(self, items, mode):
+        if self.parent() and hasattr(self.parent(), 'set_mode_for_items'):
+            self.parent().set_mode_for_items(items, mode)

@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QColorDialog, QSlider, QWidget
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QColorDialog, QSlider, QWidget, QComboBox
 )
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QKeySequence, QImage
@@ -18,7 +18,7 @@ class PaintCanvas(QWidget):
         self.brush_color = QColor(255, 0, 0)
         self.brush_size = 5
         self.is_eraser = False
-        self.is_grayscale = False
+        self.color_mode = "color"
         self.scale_factor = 1.0
         self.offset = QPointF(0, 0)
         
@@ -57,8 +57,12 @@ class PaintCanvas(QWidget):
         painter.translate(self.offset)
         painter.scale(self.scale_factor, self.scale_factor)
         
-        if self.is_grayscale:
+        if self.color_mode == "grayscale":
             img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+            pix = QPixmap.fromImage(img)
+            painter.drawPixmap(0, 0, pix)
+        elif self.color_mode == "bw":
+            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_Mono)
             pix = QPixmap.fromImage(img)
             painter.drawPixmap(0, 0, pix)
         else:
@@ -140,7 +144,7 @@ class PaintCanvas(QWidget):
             self.update()
 
 class PaintDialog(QDialog):
-    def __init__(self, pixmap, existing_strokes=None, is_grayscale=False, parent=None):
+    def __init__(self, pixmap, existing_strokes=None, color_mode="color", parent=None):
         super().__init__(parent)
         self.setWindowTitle("Paint Cut")
         self.resize(800, 600)
@@ -158,11 +162,12 @@ class PaintDialog(QDialog):
         self.eraser_btn.clicked.connect(self.toggle_eraser)
         toolbar.addWidget(self.eraser_btn)
         
-        self.grayscale_btn = QPushButton("Color" if is_grayscale else "Grayscale")
-        self.grayscale_btn.setCheckable(True)
-        self.grayscale_btn.setChecked(is_grayscale)
-        self.grayscale_btn.clicked.connect(self.toggle_grayscale)
-        toolbar.addWidget(self.grayscale_btn)
+        self.color_mode_combo = QComboBox()
+        self.color_mode_combo.addItems(["Original Color", "Grayscale", "Black & White"])
+        mode_index = {"color": 0, "grayscale": 1, "bw": 2}.get(color_mode, 0)
+        self.color_mode_combo.setCurrentIndex(mode_index)
+        self.color_mode_combo.currentIndexChanged.connect(self.color_mode_changed)
+        toolbar.addWidget(self.color_mode_combo)
         
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(1, 50)
@@ -186,7 +191,7 @@ class PaintDialog(QDialog):
         
         # Canvas
         self.canvas = PaintCanvas(pixmap)
-        self.canvas.is_grayscale = is_grayscale
+        self.canvas.color_mode = color_mode
         if hasattr(self.parent(), 'last_paint_color'):
             self.canvas.brush_color = QColor(self.parent().last_paint_color)
             self.canvas.brush_size = getattr(self.parent(), 'last_paint_size', 5)
@@ -228,10 +233,11 @@ class PaintDialog(QDialog):
     def toggle_eraser(self, checked):
         self.canvas.is_eraser = checked
 
-    def toggle_grayscale(self, checked):
-        self.canvas.is_grayscale = checked
-        self.grayscale_btn.setText("Color" if checked else "Grayscale")
-        self.canvas.update()
+    def color_mode_changed(self, index):
+        modes = ["color", "grayscale", "bw"]
+        if 0 <= index < len(modes):
+            self.canvas.color_mode = modes[index]
+            self.canvas.update()
 
     def undo(self):
         self.canvas.undo()
@@ -242,5 +248,5 @@ class PaintDialog(QDialog):
     def get_strokes(self):
         return [s[1] for s in self.canvas.strokes]
 
-    def get_grayscale(self):
-        return self.canvas.is_grayscale
+    def get_color_mode(self):
+        return self.canvas.color_mode

@@ -370,10 +370,10 @@ class FloatingPreviewWindow(QWidget):
         self.eraser_btn.clicked.connect(self.toggle_eraser)
         self.toolbar.addWidget(self.eraser_btn)
         
-        self.grayscale_btn = QPushButton("Grayscale")
-        self.grayscale_btn.setCheckable(True)
-        self.grayscale_btn.clicked.connect(self.toggle_grayscale)
-        self.toolbar.addWidget(self.grayscale_btn)
+        self.color_mode_combo = QComboBox()
+        self.color_mode_combo.addItems(["Original Color", "Grayscale", "Black & White"])
+        self.color_mode_combo.currentIndexChanged.connect(self.color_mode_changed)
+        self.toolbar.addWidget(self.color_mode_combo)
         
         self.undo_btn = QPushButton("Undo")
         self.undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
@@ -415,9 +415,14 @@ class FloatingPreviewWindow(QWidget):
             
             if item:
                 data = item.data(0, Qt.ItemDataRole.UserRole)
-                self.canvas.is_grayscale = data.get("grayscale", False)
-                self.grayscale_btn.setChecked(self.canvas.is_grayscale)
-                self.grayscale_btn.setText("Color" if self.canvas.is_grayscale else "Grayscale")
+                # Backward compatibility: map grayscale bool to color_mode
+                mode = data.get("color_mode", "grayscale" if data.get("grayscale") else "color")
+                self.canvas.color_mode = mode
+                
+                self.color_mode_combo.blockSignals(True)
+                mode_index = {"color": 0, "grayscale": 1, "bw": 2}.get(mode, 0)
+                self.color_mode_combo.setCurrentIndex(mode_index)
+                self.color_mode_combo.blockSignals(False)
                 
             if hasattr(self.main_window, 'last_paint_color'):
                 self.canvas.brush_color = QColor(self.main_window.last_paint_color)
@@ -452,11 +457,12 @@ class FloatingPreviewWindow(QWidget):
         if self.canvas:
             self.canvas.is_eraser = checked
 
-    def toggle_grayscale(self, checked):
+    def color_mode_changed(self, index):
         if self.canvas:
-            self.canvas.is_grayscale = checked
-            self.grayscale_btn.setText("Color" if checked else "Grayscale")
-            self.canvas.update()
+            modes = ["color", "grayscale", "bw"]
+            if 0 <= index < len(modes):
+                self.canvas.color_mode = modes[index]
+                self.canvas.update()
 
     def undo(self):
         if self.canvas:
@@ -470,7 +476,7 @@ class FloatingPreviewWindow(QWidget):
         if not self.canvas or not self.current_item: return
         strokes = [s[1] for s in self.canvas.strokes]
         
-        self.main_window.apply_strokes_to_item(self.current_item, strokes, self.canvas.is_grayscale)
+        self.main_window.apply_strokes_to_item(self.current_item, strokes, self.canvas.color_mode)
 
 class MainWindow(QMainWindow):
     def __init__(self, input_paths, output_file, bg_image=None, bg_pattern=None, theme="dark", page_size="A4", default_save_path=None):
@@ -1218,7 +1224,7 @@ class MainWindow(QMainWindow):
                      
                  self.sidebar._setup_item_widget(item, data["title"], is_title=True)
 
-    def _reconstruct_pixmap(self, parts_data, strokes=None, grayscale=False):
+    def _reconstruct_pixmap(self, parts_data, strokes=None, color_mode="color"):
         if not parts_data: return None
         pixmaps = []
         for i, p in enumerate(parts_data):
@@ -1254,8 +1260,11 @@ class MainWindow(QMainWindow):
             
         full_pix = self.combine_parts(pixmaps)
         
-        if grayscale:
+        if color_mode == "grayscale":
             img = full_pix.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+            full_pix = QPixmap.fromImage(img)
+        elif color_mode == "bw":
+            img = full_pix.toImage().convertToFormat(QImage.Format.Format_Mono)
             full_pix = QPixmap.fromImage(img)
         
         if strokes:
@@ -1574,16 +1583,16 @@ class MainWindow(QMainWindow):
         if not pixmap: return
         
         existing_strokes = data.get("strokes", [])
-        is_grayscale = data.get("grayscale", False)
+        color_mode = data.get("color_mode", "grayscale" if data.get("grayscale") else "color")
         
         from .paint_dialog import PaintDialog
-        dlg = PaintDialog(pixmap, existing_strokes=existing_strokes, is_grayscale=is_grayscale, parent=self)
+        dlg = PaintDialog(pixmap, existing_strokes=existing_strokes, color_mode=color_mode, parent=self)
         if dlg.exec():
             strokes = dlg.get_strokes()
-            grayscale = dlg.get_grayscale()
-            self.apply_strokes_to_item(item, strokes, grayscale)
+            new_color_mode = dlg.get_color_mode()
+            self.apply_strokes_to_item(item, strokes, new_color_mode)
             
-    def apply_strokes_to_item(self, item, strokes, grayscale=None, add_undo=True):
+    def apply_strokes_to_item(self, item, strokes, color_mode=None, add_undo=True):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data: return
         
@@ -1591,12 +1600,12 @@ class MainWindow(QMainWindow):
             self.undo_stack.append(self.current_state_snapshot)
         
         data["strokes"] = strokes
-        if grayscale is not None:
-            data["grayscale"] = grayscale
+        if color_mode is not None:
+            data["color_mode"] = color_mode
         else:
-            grayscale = data.get("grayscale", False)
+            color_mode = data.get("color_mode", "grayscale" if data.get("grayscale") else "color")
         
-        new_pix = self._reconstruct_pixmap(data.get("parts", []), strokes=strokes, grayscale=grayscale)
+        new_pix = self._reconstruct_pixmap(data.get("parts", []), strokes=strokes, color_mode=color_mode)
         data["content"] = new_pix
         item.setData(0, Qt.ItemDataRole.UserRole, data)
         widget = self.sidebar.tree.itemWidget(item, 0)
@@ -1611,7 +1620,7 @@ class MainWindow(QMainWindow):
             self.set_unsaved_changes(True)
             self.update_floating_preview()
 
-    def toggle_grayscale_for_items(self, items):
+    def set_mode_for_items(self, items, mode_to_set):
         image_items = []
         def _collect(item):
             data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -1628,14 +1637,11 @@ class MainWindow(QMainWindow):
         if not image_items: return
         
         self.undo_stack.append(self.current_state_snapshot)
-        
-        all_grayscale = all(it.data(0, Qt.ItemDataRole.UserRole).get("grayscale", False) for it in image_items)
-        new_state = not all_grayscale
 
         for item in image_items:
             data = item.data(0, Qt.ItemDataRole.UserRole)
             strokes = data.get("strokes", [])
-            self.apply_strokes_to_item(item, strokes, grayscale=new_state, add_undo=False)
+            self.apply_strokes_to_item(item, strokes, color_mode=mode_to_set, add_undo=False)
             
         self.current_state_snapshot = self._get_sidebar_state()
         self.redo_stack.clear()
