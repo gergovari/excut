@@ -348,6 +348,11 @@ class SidebarTree(QTreeWidget):
             set_grayscale = color_mode_menu.addAction("Grayscale")
             set_hide_red = color_mode_menu.addAction("Hide Red")
             
+            write_title_action = menu.addAction("Write title into page")
+            write_title_action.setCheckable(True)
+            all_show_title = all(i.data(0, Qt.ItemDataRole.UserRole).get("show_title", False) for i in selected)
+            write_title_action.setChecked(all_show_title)
+            
             action = menu.exec(event.globalPos())
             if action == move_up:
                 self.move_item_up(item)
@@ -359,6 +364,14 @@ class SidebarTree(QTreeWidget):
                 self.set_color_mode_requested.emit(selected, "grayscale")
             elif action == set_hide_red:
                 self.set_color_mode_requested.emit(selected, "hide_red")
+            elif action == write_title_action:
+                new_state = write_title_action.isChecked()
+                for i in selected:
+                    d = i.data(0, Qt.ItemDataRole.UserRole)
+                    if d:
+                        d["show_title"] = new_state
+                        i.setData(0, Qt.ItemDataRole.UserRole, d)
+                self.widgets_refreshed.emit()
         else:
             super().contextMenuEvent(event)
 

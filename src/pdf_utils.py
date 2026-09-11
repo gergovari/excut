@@ -166,7 +166,12 @@ def generate_output_pdf(items, output_path, bg_image=None, bg_pattern=None, page
             c.setFont("Helvetica-Bold", font_size_num)
             
             left_margin = 40 * scale_factor
-            c.drawString(left_margin, current_y, f"{ex_count} /")
+            
+            title_text = f"{ex_count} /"
+            if item.get("show_title") and display_title:
+                title_text += f" {display_title}"
+                
+            c.drawString(left_margin, current_y, title_text)
             
             # Draw Tick Circle
             cx = width - (50 * scale_factor)

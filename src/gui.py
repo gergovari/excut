@@ -1194,13 +1194,16 @@ class MainWindow(QMainWindow):
                     else:
                          clean_parts.append(copy.deepcopy(p))
                 
-                pix = self._reconstruct_pixmap(clean_parts, strokes=strokes)
+                color_mode = data.get("color_mode", "color")
+                pix = self._reconstruct_pixmap(clean_parts, strokes=strokes, color_mode=color_mode)
                 if pix:
                     from PyQt6.QtWidgets import QTreeWidgetItem
                     item = QTreeWidgetItem()
                     item_data = {"type": "image", "content": pix, "title": data.get("title", ""), "parts": clean_parts}
                     if strokes:
                         item_data["strokes"] = strokes
+                    if "color_mode" in data:
+                        item_data["color_mode"] = data["color_mode"]
                     item.setData(0, Qt.ItemDataRole.UserRole, item_data)
                     
                     if parent_item:
@@ -1819,7 +1822,18 @@ class MainWindow(QMainWindow):
         for item in items:
             new_item = item.copy()
             if item["type"] == "image":
-                pix = item["content"]
+                parts = item.get("parts", [])
+                strokes = item.get("strokes")
+                color_mode = item.get("color_mode", "color")
+                
+                if parts:
+                    pix = self._reconstruct_pixmap(parts, strokes=strokes, color_mode=color_mode)
+                else:
+                    pix = item["content"]
+                    
+                if not pix:
+                    pix = item["content"]
+                    
                 qimg = pix.toImage()
                 
                 from PyQt6.QtCore import QBuffer, QIODevice
