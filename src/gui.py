@@ -371,7 +371,7 @@ class FloatingPreviewWindow(QWidget):
         self.toolbar.addWidget(self.eraser_btn)
         
         self.color_mode_combo = QComboBox()
-        self.color_mode_combo.addItems(["Original Color", "Grayscale", "Black & White"])
+        self.color_mode_combo.addItems(["Original Color", "Grayscale", "Hide Red"])
         self.color_mode_combo.currentIndexChanged.connect(self.color_mode_changed)
         self.toolbar.addWidget(self.color_mode_combo)
         
@@ -420,7 +420,7 @@ class FloatingPreviewWindow(QWidget):
                 self.canvas.color_mode = mode
                 
                 self.color_mode_combo.blockSignals(True)
-                mode_index = {"color": 0, "grayscale": 1, "bw": 2}.get(mode, 0)
+                mode_index = {"color": 0, "grayscale": 1, "hide_red": 2}.get(mode, 0)
                 self.color_mode_combo.setCurrentIndex(mode_index)
                 self.color_mode_combo.blockSignals(False)
                 
@@ -459,7 +459,7 @@ class FloatingPreviewWindow(QWidget):
 
     def color_mode_changed(self, index):
         if self.canvas:
-            modes = ["color", "grayscale", "bw"]
+            modes = ["color", "grayscale", "hide_red"]
             if 0 <= index < len(modes):
                 self.canvas.color_mode = modes[index]
                 self.canvas.update()
@@ -1263,8 +1263,31 @@ class MainWindow(QMainWindow):
         if color_mode == "grayscale":
             img = full_pix.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
             full_pix = QPixmap.fromImage(img)
-        elif color_mode == "bw":
-            img = full_pix.toImage().convertToFormat(QImage.Format.Format_Mono)
+        elif color_mode == "hide_red":
+            img = full_pix.toImage().convertToFormat(QImage.Format.Format_RGB32)
+            
+            # Isolate Green channel to map Red to Black and White to White
+            green_mask = QImage(img.size(), QImage.Format.Format_RGB32)
+            green_mask.fill(QColor(0, 255, 0))
+            p = QPainter(img)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+            p.drawImage(0, 0, green_mask)
+            p.end()
+            
+            # Determine Qt's exact grayscale coefficient for pure green
+            test_img = QImage(1, 1, QImage.Format.Format_RGB32)
+            test_img.fill(QColor(0, 255, 0))
+            test_gray = test_img.convertToFormat(QImage.Format.Format_Grayscale8)
+            green_gray_val = test_gray.pixelColor(0, 0).red()
+            if green_gray_val == 0: green_gray_val = 150
+            
+            # Convert to grayscale and normalize so Green (which was White) becomes 255 (White)
+            # Red (which has 0 Green) becomes 0 (Black)
+            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
+            table = [0xff000000 | (min(255, int(i * 255.0 / green_gray_val)) * 0x010101) for i in range(256)]
+            img = img.convertToFormat(QImage.Format.Format_Indexed8, table)
+            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
+            
             full_pix = QPixmap.fromImage(img)
         
         if strokes:

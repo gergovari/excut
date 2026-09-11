@@ -346,7 +346,7 @@ class SidebarTree(QTreeWidget):
             color_mode_menu = menu.addMenu("Color Mode")
             set_color = color_mode_menu.addAction("Original Color")
             set_grayscale = color_mode_menu.addAction("Grayscale")
-            set_bw = color_mode_menu.addAction("Black & White")
+            set_hide_red = color_mode_menu.addAction("Hide Red")
             
             action = menu.exec(event.globalPos())
             if action == move_up:
@@ -357,8 +357,8 @@ class SidebarTree(QTreeWidget):
                 self.set_color_mode_requested.emit(selected, "color")
             elif action == set_grayscale:
                 self.set_color_mode_requested.emit(selected, "grayscale")
-            elif action == set_bw:
-                self.set_color_mode_requested.emit(selected, "bw")
+            elif action == set_hide_red:
+                self.set_color_mode_requested.emit(selected, "hide_red")
         else:
             super().contextMenuEvent(event)
 

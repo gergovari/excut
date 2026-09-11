@@ -61,8 +61,31 @@ class PaintCanvas(QWidget):
             img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
             pix = QPixmap.fromImage(img)
             painter.drawPixmap(0, 0, pix)
-        elif self.color_mode == "bw":
-            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_Mono)
+        elif self.color_mode == "hide_red":
+            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_RGB32)
+            
+            # Isolate Green channel to map Red to Black and White to White
+            green_mask = QImage(img.size(), QImage.Format.Format_RGB32)
+            green_mask.fill(QColor(0, 255, 0))
+            p = QPainter(img)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+            p.drawImage(0, 0, green_mask)
+            p.end()
+            
+            # Determine Qt's exact grayscale coefficient for pure green
+            test_img = QImage(1, 1, QImage.Format.Format_RGB32)
+            test_img.fill(QColor(0, 255, 0))
+            test_gray = test_img.convertToFormat(QImage.Format.Format_Grayscale8)
+            green_gray_val = test_gray.pixelColor(0, 0).red()
+            if green_gray_val == 0: green_gray_val = 150
+            
+            # Convert to grayscale and normalize so Green (which was White) becomes 255 (White)
+            # Red (which has 0 Green) becomes 0 (Black)
+            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
+            table = [0xff000000 | (min(255, int(i * 255.0 / green_gray_val)) * 0x010101) for i in range(256)]
+            img = img.convertToFormat(QImage.Format.Format_Indexed8, table)
+            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
+            
             pix = QPixmap.fromImage(img)
             painter.drawPixmap(0, 0, pix)
         else:
@@ -163,8 +186,8 @@ class PaintDialog(QDialog):
         toolbar.addWidget(self.eraser_btn)
         
         self.color_mode_combo = QComboBox()
-        self.color_mode_combo.addItems(["Original Color", "Grayscale", "Black & White"])
-        mode_index = {"color": 0, "grayscale": 1, "bw": 2}.get(color_mode, 0)
+        self.color_mode_combo.addItems(["Original Color", "Grayscale", "Hide Red"])
+        mode_index = {"color": 0, "grayscale": 1, "hide_red": 2}.get(color_mode, 0)
         self.color_mode_combo.setCurrentIndex(mode_index)
         self.color_mode_combo.currentIndexChanged.connect(self.color_mode_changed)
         toolbar.addWidget(self.color_mode_combo)
@@ -234,7 +257,7 @@ class PaintDialog(QDialog):
         self.canvas.is_eraser = checked
 
     def color_mode_changed(self, index):
-        modes = ["color", "grayscale", "bw"]
+        modes = ["color", "grayscale", "hide_red"]
         if 0 <= index < len(modes):
             self.canvas.color_mode = modes[index]
             self.canvas.update()
