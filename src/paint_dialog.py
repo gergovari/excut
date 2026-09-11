@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QColorDialog, QSlider, QWidget
 )
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, pyqtSignal, QSize
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QKeySequence
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QKeySequence, QImage
 
 class PaintCanvas(QWidget):
     def __init__(self, pixmap, parent=None):
@@ -149,7 +149,7 @@ class PaintDialog(QDialog):
         # Toolbar
         toolbar = QHBoxLayout()
         
-        self.color_btn = QPushButton("Color")
+        self.color_btn = QPushButton("Brush Color")
         self.color_btn.clicked.connect(self.choose_color)
         toolbar.addWidget(self.color_btn)
         
@@ -158,7 +158,7 @@ class PaintDialog(QDialog):
         self.eraser_btn.clicked.connect(self.toggle_eraser)
         toolbar.addWidget(self.eraser_btn)
         
-        self.grayscale_btn = QPushButton("Grayscale")
+        self.grayscale_btn = QPushButton("Color" if is_grayscale else "Grayscale")
         self.grayscale_btn.setCheckable(True)
         self.grayscale_btn.setChecked(is_grayscale)
         self.grayscale_btn.clicked.connect(self.toggle_grayscale)
@@ -230,6 +230,7 @@ class PaintDialog(QDialog):
 
     def toggle_grayscale(self, checked):
         self.canvas.is_grayscale = checked
+        self.grayscale_btn.setText("Color" if checked else "Grayscale")
         self.canvas.update()
 
     def undo(self):

@@ -279,6 +279,7 @@ class SidebarItemWidget(QWidget):
 
 class SidebarTree(QTreeWidget):
     widgets_refreshed = pyqtSignal()
+    toggle_grayscale_requested = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -338,11 +339,19 @@ class SidebarTree(QTreeWidget):
             move_up = menu.addAction("Move Up\tAlt+Up")
             move_down = menu.addAction("Move Down\tAlt+Down")
             
+            selected = self.selectedItems()
+            if item not in selected:
+                selected = [item]
+                
+            toggle_grayscale = menu.addAction("Toggle Grayscale")
+            
             action = menu.exec(event.globalPos())
             if action == move_up:
                 self.move_item_up(item)
             elif action == move_down:
                 self.move_item_down(item)
+            elif action == toggle_grayscale:
+                self.toggle_grayscale_requested.emit(selected)
         else:
             super().contextMenuEvent(event)
 
@@ -435,6 +444,7 @@ class Sidebar(QWidget):
         self.tree.itemDoubleClicked.connect(self.on_item_double_click)
         self.tree.widgets_refreshed.connect(self.restore_widgets)
         self.tree.widgets_refreshed.connect(self.state_changed.emit)
+        self.tree.toggle_grayscale_requested.connect(self.on_toggle_grayscale_requested)
         self.state_changed.connect(self.evaluate_dynamic_titles)
         self.layout.addWidget(self.tree)
         
@@ -903,3 +913,7 @@ class Sidebar(QWidget):
         # Recursion
         for i in range(item.childCount()):
             self._update_item_style(item.child(i), theme)
+
+    def on_toggle_grayscale_requested(self, items):
+        if self.parent() and hasattr(self.parent(), 'toggle_grayscale_for_items'):
+            self.parent().toggle_grayscale_for_items(items)

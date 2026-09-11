@@ -354,7 +354,7 @@ class FloatingPreviewWindow(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         
         self.toolbar = QHBoxLayout()
-        self.color_btn = QPushButton("Color")
+        self.color_btn = QPushButton("Brush Color")
         self.color_btn.clicked.connect(self.choose_color)
         self.toolbar.addWidget(self.color_btn)
         
@@ -417,6 +417,7 @@ class FloatingPreviewWindow(QWidget):
                 data = item.data(0, Qt.ItemDataRole.UserRole)
                 self.canvas.is_grayscale = data.get("grayscale", False)
                 self.grayscale_btn.setChecked(self.canvas.is_grayscale)
+                self.grayscale_btn.setText("Color" if self.canvas.is_grayscale else "Grayscale")
                 
             if hasattr(self.main_window, 'last_paint_color'):
                 self.canvas.brush_color = QColor(self.main_window.last_paint_color)
@@ -454,6 +455,7 @@ class FloatingPreviewWindow(QWidget):
     def toggle_grayscale(self, checked):
         if self.canvas:
             self.canvas.is_grayscale = checked
+            self.grayscale_btn.setText("Color" if checked else "Grayscale")
             self.canvas.update()
 
     def undo(self):
@@ -1581,11 +1583,12 @@ class MainWindow(QMainWindow):
             grayscale = dlg.get_grayscale()
             self.apply_strokes_to_item(item, strokes, grayscale)
             
-    def apply_strokes_to_item(self, item, strokes, grayscale=None):
+    def apply_strokes_to_item(self, item, strokes, grayscale=None, add_undo=True):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data: return
         
-        self.undo_stack.append(self.current_state_snapshot)
+        if add_undo:
+            self.undo_stack.append(self.current_state_snapshot)
         
         data["strokes"] = strokes
         if grayscale is not None:
@@ -1601,6 +1604,38 @@ class MainWindow(QMainWindow):
             widget.set_icon(new_pix)
             
         item.setIcon(0, QIcon(new_pix))
+            
+        if add_undo:
+            self.current_state_snapshot = self._get_sidebar_state()
+            self.redo_stack.clear()
+            self.set_unsaved_changes(True)
+            self.update_floating_preview()
+
+    def toggle_grayscale_for_items(self, items):
+        image_items = []
+        def _collect(item):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data["type"] == "image":
+                if item not in image_items:
+                    image_items.append(item)
+            elif data and data["type"] == "group":
+                for i in range(item.childCount()):
+                    _collect(item.child(i))
+
+        for it in items:
+            _collect(it)
+
+        if not image_items: return
+        
+        self.undo_stack.append(self.current_state_snapshot)
+        
+        all_grayscale = all(it.data(0, Qt.ItemDataRole.UserRole).get("grayscale", False) for it in image_items)
+        new_state = not all_grayscale
+
+        for item in image_items:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            strokes = data.get("strokes", [])
+            self.apply_strokes_to_item(item, strokes, grayscale=new_state, add_undo=False)
             
         self.current_state_snapshot = self._get_sidebar_state()
         self.redo_stack.clear()
