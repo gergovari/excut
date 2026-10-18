@@ -3,6 +3,36 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QKeySequence, QImage
+from PIL import Image, ImageChops
+
+def apply_color_mode(qimg, color_mode):
+    if color_mode == "grayscale":
+        return qimg.convertToFormat(QImage.Format.Format_Grayscale8)
+    if color_mode not in ("hide_red", "hide_green", "hide_blue"):
+        return qimg
+    if qimg.isNull() or qimg.width() == 0 or qimg.height() == 0:
+        return qimg
+
+    rgba_img = qimg.convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = rgba_img.width(), rgba_img.height()
+    buf = rgba_img.bits().asstring(rgba_img.sizeInBytes())
+    pil_img = Image.frombuffer('RGBA', (w, h), buf, 'raw', 'RGBA', 0, 1)
+    r, g, b, a = pil_img.split()
+
+    if color_mode == "hide_red":
+        base = ImageChops.lighter(g, b)
+        excess = ImageChops.subtract(r, base)
+    elif color_mode == "hide_green":
+        base = ImageChops.lighter(r, b)
+        excess = ImageChops.subtract(g, base)
+    elif color_mode == "hide_blue":
+        base = ImageChops.lighter(r, g)
+        excess = ImageChops.subtract(b, base)
+
+    excess2 = ImageChops.add(excess, excess)
+    gray = ImageChops.subtract(base, excess2)
+
+    return QImage(gray.tobytes(), w, h, w, QImage.Format.Format_Grayscale8).copy()
 
 class PaintCanvas(QWidget):
     def __init__(self, pixmap, parent=None):
@@ -57,89 +87,8 @@ class PaintCanvas(QWidget):
         painter.translate(self.offset)
         painter.scale(self.scale_factor, self.scale_factor)
         
-        if self.color_mode == "grayscale":
-            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
-            pix = QPixmap.fromImage(img)
-            painter.drawPixmap(0, 0, pix)
-        elif self.color_mode == "hide_red":
-            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_RGB32)
-            
-            # Isolate Green channel to map Red to Black and White to White
-            green_mask = QImage(img.size(), QImage.Format.Format_RGB32)
-            green_mask.fill(QColor(0, 255, 0))
-            p = QPainter(img)
-            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
-            p.drawImage(0, 0, green_mask)
-            p.end()
-            
-            # Determine Qt's exact grayscale coefficient for pure green
-            test_img = QImage(1, 1, QImage.Format.Format_RGB32)
-            test_img.fill(QColor(0, 255, 0))
-            test_gray = test_img.convertToFormat(QImage.Format.Format_Grayscale8)
-            green_gray_val = test_gray.pixelColor(0, 0).red()
-            if green_gray_val == 0: green_gray_val = 150
-            
-            # Convert to grayscale and normalize so Green (which was White) becomes 255 (White)
-            # Red (which has 0 Green) becomes 0 (Black)
-            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-            table = [0xff000000 | (min(255, int(i * 255.0 / green_gray_val)) * 0x010101) for i in range(256)]
-            img = img.convertToFormat(QImage.Format.Format_Indexed8, table)
-            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-            
-            pix = QPixmap.fromImage(img)
-            painter.drawPixmap(0, 0, pix)
-        elif self.color_mode == "hide_green":
-            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_RGB32)
-            
-            # Isolate Red channel to map Green to Black and White to White
-            red_mask = QImage(img.size(), QImage.Format.Format_RGB32)
-            red_mask.fill(QColor(255, 0, 0))
-            p = QPainter(img)
-            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
-            p.drawImage(0, 0, red_mask)
-            p.end()
-            
-            # Determine Qt's exact grayscale coefficient for pure red
-            test_img = QImage(1, 1, QImage.Format.Format_RGB32)
-            test_img.fill(QColor(255, 0, 0))
-            test_gray = test_img.convertToFormat(QImage.Format.Format_Grayscale8)
-            red_gray_val = test_gray.pixelColor(0, 0).red()
-            if red_gray_val == 0: red_gray_val = 127
-            
-            # Convert to grayscale and normalize so Red (which was White) becomes 255 (White)
-            # Green (which has 0 Red) becomes 0 (Black)
-            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-            table = [0xff000000 | (min(255, int(i * 255.0 / red_gray_val)) * 0x010101) for i in range(256)]
-            img = img.convertToFormat(QImage.Format.Format_Indexed8, table)
-            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-            
-            pix = QPixmap.fromImage(img)
-            painter.drawPixmap(0, 0, pix)
-        elif self.color_mode == "hide_blue":
-            img = self.base_pixmap.toImage().convertToFormat(QImage.Format.Format_RGB32)
-            
-            # Isolate Red and Green channels to map Blue to Black and White to White
-            yellow_mask = QImage(img.size(), QImage.Format.Format_RGB32)
-            yellow_mask.fill(QColor(255, 255, 0))
-            p = QPainter(img)
-            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
-            p.drawImage(0, 0, yellow_mask)
-            p.end()
-            
-            # Determine Qt's exact grayscale coefficient for pure yellow
-            test_img = QImage(1, 1, QImage.Format.Format_RGB32)
-            test_img.fill(QColor(255, 255, 0))
-            test_gray = test_img.convertToFormat(QImage.Format.Format_Grayscale8)
-            yellow_gray_val = test_gray.pixelColor(0, 0).red()
-            if yellow_gray_val == 0: yellow_gray_val = 247
-            
-            # Convert to grayscale and normalize so Yellow (which was White) becomes 255 (White)
-            # Blue (which has 0 Yellow) becomes 0 (Black)
-            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-            table = [0xff000000 | (min(255, int(i * 255.0 / yellow_gray_val)) * 0x010101) for i in range(256)]
-            img = img.convertToFormat(QImage.Format.Format_Indexed8, table)
-            img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-            
+        if self.color_mode in ("grayscale", "hide_red", "hide_green", "hide_blue"):
+            img = apply_color_mode(self.base_pixmap.toImage(), self.color_mode)
             pix = QPixmap.fromImage(img)
             painter.drawPixmap(0, 0, pix)
         else:
