@@ -13,16 +13,38 @@ def apply_color_mode(qimg, color_mode):
     if qimg.isNull() or qimg.width() == 0 or qimg.height() == 0:
         return qimg
 
+    if color_mode == "hide_red":
+        img = qimg.convertToFormat(QImage.Format.Format_RGB32)
+        
+        # Isolate Green channel to map Red to Black and White to White
+        green_mask = QImage(img.size(), QImage.Format.Format_RGB32)
+        green_mask.fill(QColor(0, 255, 0))
+        p = QPainter(img)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+        p.drawImage(0, 0, green_mask)
+        p.end()
+        
+        # Determine Qt's exact grayscale coefficient for pure green
+        test_img = QImage(1, 1, QImage.Format.Format_RGB32)
+        test_img.fill(QColor(0, 255, 0))
+        test_gray = test_img.convertToFormat(QImage.Format.Format_Grayscale8)
+        green_gray_val = test_gray.pixelColor(0, 0).red()
+        if green_gray_val == 0: green_gray_val = 150
+        
+        # Convert to grayscale and normalize so Green (which was White) becomes 255 (White)
+        # Red (which has 0 Green) becomes 0 (Black)
+        img = img.convertToFormat(QImage.Format.Format_Grayscale8)
+        table = [0xff000000 | (min(255, int(i * 255.0 / green_gray_val)) * 0x010101) for i in range(256)]
+        img = img.convertToFormat(QImage.Format.Format_Indexed8, table)
+        return img.convertToFormat(QImage.Format.Format_Grayscale8)
+
     rgba_img = qimg.convertToFormat(QImage.Format.Format_RGBA8888)
     w, h = rgba_img.width(), rgba_img.height()
     buf = rgba_img.bits().asstring(rgba_img.sizeInBytes())
     pil_img = Image.frombuffer('RGBA', (w, h), buf, 'raw', 'RGBA', 0, 1)
     r, g, b, a = pil_img.split()
 
-    if color_mode == "hide_red":
-        base = ImageChops.lighter(g, b)
-        excess = ImageChops.subtract(r, base)
-    elif color_mode == "hide_green":
+    if color_mode == "hide_green":
         base = ImageChops.lighter(r, b)
         excess = ImageChops.subtract(g, base)
     elif color_mode == "hide_blue":
