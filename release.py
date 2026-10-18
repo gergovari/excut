@@ -91,6 +91,10 @@ def main():
             run_command(["ls", "-l", "dist"])
             sys.exit(1)
 
+    if os.path.isdir(".git"):
+        print("Pushing commits to remote origin main...")
+        run_command(["git", "push", "origin", "main"])
+
     cmd = [
         "gh", "release", "create", new_version_str,
         "--title", f"Release {new_version_str}",

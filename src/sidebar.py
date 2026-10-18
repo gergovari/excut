@@ -347,6 +347,8 @@ class SidebarTree(QTreeWidget):
             set_color = color_mode_menu.addAction("Original Color")
             set_grayscale = color_mode_menu.addAction("Grayscale")
             set_hide_red = color_mode_menu.addAction("Hide Red")
+            set_hide_green = color_mode_menu.addAction("Hide Green")
+            set_hide_blue = color_mode_menu.addAction("Hide Blue")
             
             write_title_action = menu.addAction("Write title into page")
             write_title_action.setCheckable(True)
@@ -364,6 +366,10 @@ class SidebarTree(QTreeWidget):
                 self.set_color_mode_requested.emit(selected, "grayscale")
             elif action == set_hide_red:
                 self.set_color_mode_requested.emit(selected, "hide_red")
+            elif action == set_hide_green:
+                self.set_color_mode_requested.emit(selected, "hide_green")
+            elif action == set_hide_blue:
+                self.set_color_mode_requested.emit(selected, "hide_blue")
             elif action == write_title_action:
                 new_state = write_title_action.isChecked()
                 for i in selected:
